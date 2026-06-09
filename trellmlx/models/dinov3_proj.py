@@ -28,7 +28,9 @@ class DinoV3ProjFeatureExtractor(nn.Module):
 
     Outputs:
         global_features: [B, 5, 1024] — CLS + 4 register tokens
-        proj_features:   [B, R^3, 1024] — projected patch features
+        proj_features:   [B, R^3, D] — projected features
+            D = embed_dim (1024) without upsampling
+            D = embed_dim * 2 (2048) with bilinear upsampling (LR + HR concat)
 
     The per-block proj_linear lives in ProjectAttention, not here.
     """
@@ -38,6 +40,8 @@ class DinoV3ProjFeatureExtractor(nn.Module):
         dinov3_model: DINOv3ViT,
         image_size: int = 512,
         grid_resolution: int = 16,
+        use_bilinear_upsample: bool = False,
+        upsample_target_size: int = 128,
     ):
         super().__init__()
         self.dinov3 = dinov3_model
@@ -47,14 +51,16 @@ class DinoV3ProjFeatureExtractor(nn.Module):
         self.patch_number = image_size // self.patch_size
         self.embed_dim = dinov3_model.hidden_size
         self.num_prefix = dinov3_model.num_prefix_tokens  # 5 (CLS + 4 regs)
+        self.use_bilinear_upsample = use_bilinear_upsample
+        self.upsample_target_size = upsample_target_size
 
         self.proj_grid = ProjGrid(
             grid_resolution=grid_resolution,
             image_resolution=image_size,
         )
 
-        # Output dimension for ProjectAttention to know
-        self.proj_channels = self.embed_dim
+        # Output dimension: 1024 without upsample, 2048 with (LR + HR concat)
+        self.proj_channels = self.embed_dim * 2 if use_bilinear_upsample else self.embed_dim
 
     def __call__(
         self,
@@ -94,8 +100,8 @@ class DinoV3ProjFeatureExtractor(nn.Module):
             B, self.patch_number, self.patch_number, self.embed_dim
         )
 
-        # Project 3D grid to 2D and sample features
-        z_proj = self.proj_grid(
+        # LR projection: sample from DINOv3 patch feature map
+        z_proj_lr = self.proj_grid(
             z_spatial,
             camera_angle_x,
             distance,
@@ -103,6 +109,40 @@ class DinoV3ProjFeatureExtractor(nn.Module):
             transform_matrix,
             BHWC=True,
         )  # [B, R^3, 1024]
+
+        if self.use_bilinear_upsample:
+            # Bilinear upsample: resize patch features to higher resolution
+            # then sample again for HR features. Approximates NAF upsampling.
+            # z_spatial is [B, h, w, D], upsample to [B, H', W', D]
+            h, w = self.patch_number, self.patch_number
+            target_h = target_w = self.upsample_target_size
+
+            # Transpose to [B, D, h, w] for resize, then back
+            z_bchw = z_spatial.transpose(0, 3, 1, 2)  # [B, D, h, w]
+
+            # Bilinear resize via MLX — reshape each channel
+            # Use numpy for the resize (small tensor, done once)
+            z_np = np.array(z_bchw)  # [B, D, h, w]
+            from scipy.ndimage import zoom
+            scale_h = target_h / h
+            scale_w = target_w / w
+            z_hr_np = zoom(z_np, (1, 1, scale_h, scale_w), order=1)  # bilinear
+            z_hr = mx.array(z_hr_np.astype(np.float32))  # [B, D, H', W']
+
+            # Sample from upsampled features
+            z_proj_hr = self.proj_grid(
+                z_hr,
+                camera_angle_x,
+                distance,
+                mesh_scale,
+                transform_matrix,
+                BHWC=False,  # [B, D, H', W']
+            )  # [B, R^3, 1024]
+
+            # Concatenate LR + HR (matching NAF output format)
+            z_proj = mx.concatenate([z_proj_lr, z_proj_hr], axis=-1)  # [B, R^3, 2048]
+        else:
+            z_proj = z_proj_lr
 
         return z_global, z_proj
 

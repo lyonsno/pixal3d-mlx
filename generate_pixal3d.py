@@ -125,17 +125,21 @@ def _requantize_coords(hr_coords_np, lr_resolution, hr_resolution):
 # === Feature extraction ===
 
 def extract_proj_features(image_path, dinov3_model, grid_resolution, image_size,
-                          camera_params, no_rembg=False):
+                          camera_params, no_rembg=False,
+                          use_bilinear_upsample=False, upsample_target_size=128):
     """Extract DINOv3 + projection features for one stage.
 
     Returns:
-        cond: dict {'global': [1, 5, 1024], 'proj': [1, R^3, 1024]}
+        cond: dict {'global': [1, 5, 1024], 'proj': [1, R^3, D]}
+              D = 1024 without upsample, 2048 with bilinear upsample
         neg_cond: dict with zeros
     """
     from trellmlx.models.dinov3_proj import DinoV3ProjFeatureExtractor, preprocess_image
 
     extractor = DinoV3ProjFeatureExtractor(
         dinov3_model, image_size=image_size, grid_resolution=grid_resolution,
+        use_bilinear_upsample=use_bilinear_upsample,
+        upsample_target_size=upsample_target_size,
     )
 
     # Load and preprocess image
@@ -349,10 +353,11 @@ def main():
     # Note: without NAF upsampling, proj_in=1024. The Pixal3D shape models
     # use proj_in_channels=2048 (NAF), but we can try with 1024 initially
     # and zero-pad the second half. For now, use grid_resolution=32.
-    print("  Extracting proj features (shape LR, 512, grid=32)...", flush=True)
+    print("  Extracting proj features (shape LR, 512, grid=32, bilinear upsample)...", flush=True)
     shape_lr_cond, shape_lr_neg_cond = extract_proj_features(
         args.image, dinov3, grid_resolution=32, image_size=512,
         camera_params=camera_params, no_rembg=args.no_rembg,
+        use_bilinear_upsample=True, upsample_target_size=512,
     )
 
     # Index projection features by sparse coordinates
@@ -360,7 +365,6 @@ def main():
     lr_coords_4d = np.column_stack([np.zeros(N_lr, dtype=np.int32), lr_coords])
     shape_lr_cond_sparse, shape_lr_neg_cond_sparse = index_proj_by_coords(
         shape_lr_cond, shape_lr_neg_cond, lr_coords_4d, grid_resolution=32,
-        target_dim=2048,
     )
 
     # Load LR shape flow (proj_in_channels=2048 for NAF, but we provide 1024)
@@ -429,16 +433,16 @@ def main():
     # very memory-intensive on unified memory Macs (4096 patches, O(n²) attention).
     # Use 512 image with grid=64 as a practical tradeoff for now.
     hr_image_size = 512  # TODO: 1024 with memory optimization
-    print(f"  Extracting proj features (shape HR, {hr_image_size}, grid=64)...", flush=True)
+    print(f"  Extracting proj features (shape HR, {hr_image_size}, grid=64, bilinear upsample)...", flush=True)
     shape_hr_cond, shape_hr_neg_cond = extract_proj_features(
         args.image, dinov3, grid_resolution=64, image_size=hr_image_size,
         camera_params=camera_params, no_rembg=args.no_rembg,
+        use_bilinear_upsample=True, upsample_target_size=512,
     )
 
     # Index by HR sparse coordinates
     shape_hr_cond_sparse, shape_hr_neg_cond_sparse = index_proj_by_coords(
         shape_hr_cond, shape_hr_neg_cond, quant_coords, grid_resolution=64,
-        target_dim=2048,
     )
 
     hr_slat_flow = Pixal3DSLatFlowModel(
@@ -515,14 +519,14 @@ def main():
     # Extract proj features for texture stage
     # Same image_size tradeoff as shape HR
     tex_image_size = 512  # TODO: 1024 with memory optimization
-    print(f"  Extracting proj features (tex, {tex_image_size}, grid=64)...", flush=True)
+    print(f"  Extracting proj features (tex, {tex_image_size}, grid=64, bilinear upsample)...", flush=True)
     tex_cond, tex_neg_cond = extract_proj_features(
         args.image, dinov3, grid_resolution=64, image_size=tex_image_size,
         camera_params=camera_params, no_rembg=args.no_rembg,
+        use_bilinear_upsample=True, upsample_target_size=1024,
     )
     tex_cond_sparse, tex_neg_cond_sparse = index_proj_by_coords(
         tex_cond, tex_neg_cond, quant_coords, grid_resolution=64,
-        target_dim=2048,
     )
 
     tex_flow = Pixal3DSLatFlowModel(
