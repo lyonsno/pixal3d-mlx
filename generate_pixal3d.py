@@ -126,7 +126,8 @@ def _requantize_coords(hr_coords_np, lr_resolution, hr_resolution):
 
 def extract_proj_features(image_path, dinov3_model, grid_resolution, image_size,
                           camera_params, no_rembg=False,
-                          use_bilinear_upsample=False, upsample_target_size=128):
+                          use_naf_upsample=False, use_bilinear_upsample=False,
+                          upsample_target_size=128, naf_model=None):
     """Extract DINOv3 + projection features for one stage.
 
     Returns:
@@ -138,8 +139,10 @@ def extract_proj_features(image_path, dinov3_model, grid_resolution, image_size,
 
     extractor = DinoV3ProjFeatureExtractor(
         dinov3_model, image_size=image_size, grid_resolution=grid_resolution,
+        use_naf_upsample=use_naf_upsample,
         use_bilinear_upsample=use_bilinear_upsample,
         upsample_target_size=upsample_target_size,
+        naf_model=naf_model,
     )
 
     # Load and preprocess image
@@ -278,6 +281,16 @@ def main():
     num_loaded = load_dinov3_weights(dinov3, DINOV3_WEIGHTS)
     print(f"  DINOv3 loaded ({num_loaded} arrays).", flush=True)
 
+    # === NAF upsampler (shared across stages that need it) ===
+    print("=== Loading NAF upsampler ===", flush=True)
+    from trellmlx.models.naf import NAF as NAFModel
+    from trellmlx.models.naf_loader import load_naf_weights
+
+    NAF_WEIGHTS = os.path.join(os.path.dirname(__file__), "weights", "naf_release.safetensors")
+    naf = NAFModel()
+    load_naf_weights(naf, NAF_WEIGHTS, verbose=False)
+    print("  NAF loaded (37 params, 2.7MB).", flush=True)
+
     # === Stage 1: Sparse Structure (proj) ===
     print("\n=== Stage 1: Sparse Structure (proj) ===", flush=True)
     from trellmlx.models.pixal3d_flow import Pixal3DSparseStructureFlowModel
@@ -353,11 +366,11 @@ def main():
     # Note: without NAF upsampling, proj_in=1024. The Pixal3D shape models
     # use proj_in_channels=2048 (NAF), but we can try with 1024 initially
     # and zero-pad the second half. For now, use grid_resolution=32.
-    print("  Extracting proj features (shape LR, 512, grid=32, bilinear upsample)...", flush=True)
+    print("  Extracting proj features (shape LR, 512, grid=32, NAF upsample to 512)...", flush=True)
     shape_lr_cond, shape_lr_neg_cond = extract_proj_features(
         args.image, dinov3, grid_resolution=32, image_size=512,
         camera_params=camera_params, no_rembg=args.no_rembg,
-        use_bilinear_upsample=True, upsample_target_size=512,
+        use_naf_upsample=True, upsample_target_size=512, naf_model=naf,
     )
 
     # Index projection features by sparse coordinates
@@ -433,11 +446,11 @@ def main():
     # very memory-intensive on unified memory Macs (4096 patches, O(n²) attention).
     # Use 512 image with grid=64 as a practical tradeoff for now.
     hr_image_size = 1024
-    print(f"  Extracting proj features (shape HR, {hr_image_size}, grid=64, bilinear upsample)...", flush=True)
+    print(f"  Extracting proj features (shape HR, {hr_image_size}, grid=64, NAF upsample to 512)...", flush=True)
     shape_hr_cond, shape_hr_neg_cond = extract_proj_features(
         args.image, dinov3, grid_resolution=64, image_size=hr_image_size,
         camera_params=camera_params, no_rembg=args.no_rembg,
-        use_bilinear_upsample=True, upsample_target_size=512,
+        use_naf_upsample=True, upsample_target_size=512, naf_model=naf,
     )
 
     # Index by HR sparse coordinates
@@ -526,11 +539,11 @@ def main():
     # Extract proj features for texture stage
     # Same image_size tradeoff as shape HR
     tex_image_size = 1024
-    print(f"  Extracting proj features (tex, {tex_image_size}, grid=64, bilinear upsample)...", flush=True)
+    print(f"  Extracting proj features (tex, {tex_image_size}, grid=64, NAF upsample to 1024)...", flush=True)
     tex_cond, tex_neg_cond = extract_proj_features(
         args.image, dinov3, grid_resolution=64, image_size=tex_image_size,
         camera_params=camera_params, no_rembg=args.no_rembg,
-        use_bilinear_upsample=True, upsample_target_size=1024,
+        use_naf_upsample=True, upsample_target_size=1024, naf_model=naf,
     )
     tex_cond_sparse, tex_neg_cond_sparse = index_proj_by_coords(
         tex_cond, tex_neg_cond, quant_coords, grid_resolution=64,

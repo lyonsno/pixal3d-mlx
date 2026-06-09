@@ -30,7 +30,7 @@ class DinoV3ProjFeatureExtractor(nn.Module):
         global_features: [B, 5, 1024] — CLS + 4 register tokens
         proj_features:   [B, R^3, D] — projected features
             D = embed_dim (1024) without upsampling
-            D = embed_dim * 2 (2048) with bilinear upsampling (LR + HR concat)
+            D = embed_dim * 2 (2048) with NAF or bilinear upsampling (LR + HR concat)
 
     The per-block proj_linear lives in ProjectAttention, not here.
     """
@@ -40,8 +40,10 @@ class DinoV3ProjFeatureExtractor(nn.Module):
         dinov3_model: DINOv3ViT,
         image_size: int = 512,
         grid_resolution: int = 16,
+        use_naf_upsample: bool = False,
         use_bilinear_upsample: bool = False,
         upsample_target_size: int = 128,
+        naf_model=None,
     ):
         super().__init__()
         self.dinov3 = dinov3_model
@@ -51,8 +53,10 @@ class DinoV3ProjFeatureExtractor(nn.Module):
         self.patch_number = image_size // self.patch_size
         self.embed_dim = dinov3_model.hidden_size
         self.num_prefix = dinov3_model.num_prefix_tokens  # 5 (CLS + 4 regs)
+        self.use_naf_upsample = use_naf_upsample
         self.use_bilinear_upsample = use_bilinear_upsample
         self.upsample_target_size = upsample_target_size
+        self.naf_model = naf_model
 
         self.proj_grid = ProjGrid(
             grid_resolution=grid_resolution,
@@ -60,7 +64,7 @@ class DinoV3ProjFeatureExtractor(nn.Module):
         )
 
         # Output dimension: 1024 without upsample, 2048 with (LR + HR concat)
-        self.proj_channels = self.embed_dim * 2 if use_bilinear_upsample else self.embed_dim
+        self.proj_channels = self.embed_dim * 2 if (use_naf_upsample or use_bilinear_upsample) else self.embed_dim
 
     def __call__(
         self,
@@ -110,17 +114,35 @@ class DinoV3ProjFeatureExtractor(nn.Module):
             BHWC=True,
         )  # [B, R^3, 1024]
 
-        if self.use_bilinear_upsample:
-            # Bilinear upsample: resize patch features to higher resolution
-            # then sample again for HR features. Approximates NAF upsampling.
-            # z_spatial is [B, h, w, D] — use MLX nn.Upsample for GPU-accelerated resize
+        if self.use_naf_upsample and self.naf_model is not None:
+            # NAF upsample: content-adaptive upsampling using the input image as guide
+            # NAF expects BCHW inputs
+            image_bchw = image.transpose(0, 3, 1, 2)  # [B, 3, H, W]
+            lr_features_bchw = z_spatial.transpose(0, 3, 1, 2)  # [B, D, h, w]
+
+            target_h = target_w = self.upsample_target_size
+            hr_features = self.naf_model(image_bchw, lr_features_bchw, (target_h, target_w))
+            mx.eval(hr_features)  # [B, D, H', W']
+
+            # Sample from NAF-upsampled features
+            z_proj_hr = self.proj_grid(
+                hr_features,
+                camera_angle_x,
+                distance,
+                mesh_scale,
+                transform_matrix,
+                BHWC=False,  # NAF output is BCHW
+            )  # [B, R^3, 1024]
+
+            # Concatenate LR + HR (matching upstream NAF output format)
+            z_proj = mx.concatenate([z_proj_lr, z_proj_hr], axis=-1)  # [B, R^3, 2048]
+
+        elif self.use_bilinear_upsample:
+            # Bilinear upsample fallback
             target = self.upsample_target_size
-
-            # nn.Upsample expects NHWC (which z_spatial already is)
             upsample = nn.Upsample(scale_factor=target / self.patch_number, mode="linear", align_corners=False)
-            z_hr_spatial = upsample(z_spatial)  # [B, H', W', D]
+            z_hr_spatial = upsample(z_spatial)
 
-            # Sample from upsampled features (BHWC format)
             z_proj_hr = self.proj_grid(
                 z_hr_spatial,
                 camera_angle_x,
@@ -128,10 +150,9 @@ class DinoV3ProjFeatureExtractor(nn.Module):
                 mesh_scale,
                 transform_matrix,
                 BHWC=True,
-            )  # [B, R^3, 1024]
+            )
 
-            # Concatenate LR + HR (matching NAF output format)
-            z_proj = mx.concatenate([z_proj_lr, z_proj_hr], axis=-1)  # [B, R^3, 2048]
+            z_proj = mx.concatenate([z_proj_lr, z_proj_hr], axis=-1)
         else:
             z_proj = z_proj_lr
 
