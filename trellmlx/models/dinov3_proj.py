@@ -113,30 +113,21 @@ class DinoV3ProjFeatureExtractor(nn.Module):
         if self.use_bilinear_upsample:
             # Bilinear upsample: resize patch features to higher resolution
             # then sample again for HR features. Approximates NAF upsampling.
-            # z_spatial is [B, h, w, D], upsample to [B, H', W', D]
-            h, w = self.patch_number, self.patch_number
-            target_h = target_w = self.upsample_target_size
+            # z_spatial is [B, h, w, D] — use MLX nn.Upsample for GPU-accelerated resize
+            target = self.upsample_target_size
 
-            # Transpose to [B, D, h, w] for resize, then back
-            z_bchw = z_spatial.transpose(0, 3, 1, 2)  # [B, D, h, w]
+            # nn.Upsample expects NHWC (which z_spatial already is)
+            upsample = nn.Upsample(scale_factor=target / self.patch_number, mode="linear", align_corners=False)
+            z_hr_spatial = upsample(z_spatial)  # [B, H', W', D]
 
-            # Bilinear resize via MLX — reshape each channel
-            # Use numpy for the resize (small tensor, done once)
-            z_np = np.array(z_bchw)  # [B, D, h, w]
-            from scipy.ndimage import zoom
-            scale_h = target_h / h
-            scale_w = target_w / w
-            z_hr_np = zoom(z_np, (1, 1, scale_h, scale_w), order=1)  # bilinear
-            z_hr = mx.array(z_hr_np.astype(np.float32))  # [B, D, H', W']
-
-            # Sample from upsampled features
+            # Sample from upsampled features (BHWC format)
             z_proj_hr = self.proj_grid(
-                z_hr,
+                z_hr_spatial,
                 camera_angle_x,
                 distance,
                 mesh_scale,
                 transform_matrix,
-                BHWC=False,  # [B, D, H', W']
+                BHWC=True,
             )  # [B, R^3, 1024]
 
             # Concatenate LR + HR (matching NAF output format)
