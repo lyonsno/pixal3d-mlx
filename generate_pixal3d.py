@@ -597,22 +597,9 @@ def main():
         vals = tex_np_check[:, ch]
         print(f"    {name}: [{vals.min():.3f}, {vals.max():.3f}] mean={vals.mean():.3f}", flush=True)
 
-    # Fix saturated PBR: if metallic/roughness have near-zero variance,
-    # the texture flow model didn't learn meaningful material properties
-    # (likely due to degraded conditioning). Apply reasonable defaults.
-    metallic_range = float(tex_np_check[:, 3].max() - tex_np_check[:, 3].min())
-    roughness_range = float(tex_np_check[:, 4].max() - tex_np_check[:, 4].min())
-    if metallic_range < 0.1:
-        print(f"  WARNING: metallic near-constant (range={metallic_range:.3f}), clamping to 0.0", flush=True)
-        tex_out = mx.concatenate([
-            tex_out[:, :3],
-            mx.zeros((tex_out.shape[0], 1)),  # metallic = 0
-            tex_out[:, 4:],
-        ], axis=-1)
-    if roughness_range < 0.05:
-        mean_rough = float(tex_np_check[:, 4].mean())
-        print(f"  WARNING: roughness near-constant (range={roughness_range:.3f}, mean={mean_rough:.3f}), keeping as-is", flush=True)
-    mx.eval(tex_out)
+    # Note: metallic/roughness may be near-constant due to degraded
+    # conditioning (bilinear vs NAF). This is a known quality gap —
+    # the fix is proper NAF upsampling, not output clamping.
 
     print(f"  Decoded: {time.perf_counter()-t0:.1f}s ({tex_out.shape[0]:,} voxels)", flush=True)
 
