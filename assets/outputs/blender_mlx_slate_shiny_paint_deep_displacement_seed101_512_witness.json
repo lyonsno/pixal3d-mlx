@@ -1,0 +1,81 @@
+{
+  "input_glb": "/tmp/trellis2mlx-batch-measure-displacement-512-e47b521/outputs/displacement512-seed-101.glb",
+  "mesh": {
+    "bounds_max": [
+      0.4799366593360901,
+      0.40455612540245056,
+      0.4711301624774933
+    ],
+    "bounds_min": [
+      -0.49630945920944214,
+      -0.4032372236251831,
+      -0.49800029397010803
+    ],
+    "extents": [
+      0.9762461185455322,
+      0.8077933490276337,
+      0.9691304564476013
+    ],
+    "faces": 188885,
+    "is_watertight": false,
+    "vertices": 157345
+  },
+  "output_png": "/tmp/trellis2mlx-batch-measure-displacement-512-e47b521/displacement512-seed-101-witness.png",
+  "phase": "complete",
+  "report_json": "/tmp/trellis2mlx-batch-measure-displacement-512-e47b521/displacement512-seed-101-witness.json",
+  "route": "software_projected_mesh_witness",
+  "status": "ok",
+  "witness": {
+    "color_route": "texture_uv_centroid",
+    "faces_drawn": 545714,
+    "nonblank": true,
+    "panel_reports": [
+      {
+        "axes": [
+          0,
+          2
+        ],
+        "depth_axis": 1,
+        "faces_drawn": 185886,
+        "faces_rendered": 188885,
+        "faces_skipped": 2999,
+        "panel": "front_xz",
+        "scale": 604.7655286759162
+      },
+      {
+        "axes": [
+          1,
+          2
+        ],
+        "depth_axis": 0,
+        "faces_drawn": 180704,
+        "faces_rendered": 188885,
+        "faces_skipped": 8181,
+        "panel": "side_yz",
+        "scale": 609.2059083192394
+      },
+      {
+        "axes": [
+          0,
+          1
+        ],
+        "depth_axis": 2,
+        "faces_drawn": 179124,
+        "faces_rendered": 188885,
+        "faces_skipped": 9761,
+        "panel": "top_xy",
+        "scale": 604.7655286759162
+      }
+    ],
+    "panels": [
+      "front_xz",
+      "side_yz",
+      "top_xy"
+    ],
+    "pixel_std": 90.28136557506599,
+    "size": [
+      2160,
+      720
+    ]
+  }
+}
