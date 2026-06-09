@@ -210,16 +210,17 @@ class ProjGrid(nn.Module):
         )
         grid_points = grid_points / mesh_scale[:, None, None] / 2.0
 
-        # Build transform matrix
-        if transform_matrix is None:
-            tm = mx.broadcast_to(
-                self._front_view_transform[None], (B, 4, 4)
-            )
-            # Set camera distance — need mutable copy
-            tm_np = np.array(tm)
-            for b in range(B):
-                tm_np[b, 1, 3] = -float(distance[b])
-            tm = mx.array(tm_np.astype(np.float32))
+        # Build transform matrix (Pixal3D only uses front-view; custom transform
+        # is not used at inference time, matching upstream's assert)
+        assert transform_matrix is None, "Custom transform_matrix not supported"
+        tm = mx.broadcast_to(
+            self._front_view_transform[None], (B, 4, 4)
+        )
+        # Set camera distance — need mutable copy
+        tm_np = np.array(tm)
+        for b in range(B):
+            tm_np[b, 1, 3] = -float(distance[b])
+        tm = mx.array(tm_np.astype(np.float32))
 
         # Project to image coordinates
         image_points, _depth, _valid = project_points_to_image(
