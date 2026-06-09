@@ -491,17 +491,14 @@ def main():
     )
     print(f"  Extracted: {time.perf_counter()-t0:.1f}s ({len(vertices):,}V {len(faces):,}F)", flush=True)
 
-    if not args.no_cleanup:
-        from trellmlx.mesh_cleanup import cleanup_mesh
-        t0 = time.perf_counter()
-        vertices, faces = cleanup_mesh(vertices, faces, keep_largest=args.keep_largest)
-        print(f"  Cleanup: {time.perf_counter()-t0:.1f}s ({len(vertices):,}V {len(faces):,}F)", flush=True)
-
-    if args.target_faces and len(faces) > args.target_faces:
-        import fast_simplification
-        ratio = args.target_faces / len(faces)
-        vertices, faces = fast_simplification.simplify(vertices, faces, target_reduction=1.0 - ratio)
-        print(f"  Simplified: {len(vertices):,}V {len(faces):,}F", flush=True)
+    # Use the same multi-pass cleanup+simplify as trellis2mlx generate.py
+    from generate import _cleanup_and_simplify_mesh
+    vertices, faces = _cleanup_and_simplify_mesh(
+        vertices, faces,
+        target_faces=args.target_faces,
+        no_cleanup=args.no_cleanup,
+        keep_largest=args.keep_largest,
+    )
 
     # === Stage 4: Texture (proj, 1024) ===
     print("\n=== Stage 4: Texture SLat (proj, 1024) ===", flush=True)
