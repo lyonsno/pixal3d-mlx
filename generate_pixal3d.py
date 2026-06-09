@@ -463,6 +463,13 @@ def main():
     mx.eval(hr_slat)
     print(f"  Sampled: {time.perf_counter()-t0:.1f}s ({num_tokens:,} tokens)", flush=True)
 
+    # Diagnostic: shape latent stats
+    hr_slat_np = np.array(hr_slat)
+    print(f"  Shape latent (normalized): shape={hr_slat_np.shape}", flush=True)
+    print(f"    per-channel std: min={hr_slat_np.std(axis=0).min():.4f} "
+          f"max={hr_slat_np.std(axis=0).max():.4f} "
+          f"mean={hr_slat_np.std(axis=0).mean():.4f}", flush=True)
+
     hr_slat = _denormalize_slat(hr_slat)
     mx.eval(hr_slat)
 
@@ -552,8 +559,21 @@ def main():
     mx.eval(tex_slat)
     print(f"  Sampled: {time.perf_counter()-t0:.1f}s ({num_tokens:,} tokens)", flush=True)
 
+    # Diagnostic: texture latent stats before denormalization
+    tex_slat_np = np.array(tex_slat)
+    print(f"  Texture latent (normalized): shape={tex_slat_np.shape}", flush=True)
+    print(f"    per-channel std: min={tex_slat_np.std(axis=0).min():.4f} "
+          f"max={tex_slat_np.std(axis=0).max():.4f} "
+          f"mean={tex_slat_np.std(axis=0).mean():.4f}", flush=True)
+
     tex_slat = _denormalize_slat(tex_slat, mean=TEX_SLAT_MEAN, std=TEX_SLAT_STD)
     mx.eval(tex_slat)
+
+    # And after denormalization
+    tex_dn_np = np.array(tex_slat)
+    print(f"  Texture latent (denormalized):", flush=True)
+    print(f"    per-channel std: min={tex_dn_np.std(axis=0).min():.4f} "
+          f"max={tex_dn_np.std(axis=0).max():.4f}", flush=True)
 
     cleanup_model(tex_flow)
     del tex_flow
