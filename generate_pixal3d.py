@@ -432,7 +432,7 @@ def main():
     # Upstream uses image_size=1024, grid=64, but DINOv3 at 1024x1024 is
     # very memory-intensive on unified memory Macs (4096 patches, O(n²) attention).
     # Use 512 image with grid=64 as a practical tradeoff for now.
-    hr_image_size = 512  # TODO: 1024 with memory optimization
+    hr_image_size = 1024
     print(f"  Extracting proj features (shape HR, {hr_image_size}, grid=64, bilinear upsample)...", flush=True)
     shape_hr_cond, shape_hr_neg_cond = extract_proj_features(
         args.image, dinov3, grid_resolution=64, image_size=hr_image_size,
@@ -518,7 +518,7 @@ def main():
 
     # Extract proj features for texture stage
     # Same image_size tradeoff as shape HR
-    tex_image_size = 512  # TODO: 1024 with memory optimization
+    tex_image_size = 1024
     print(f"  Extracting proj features (tex, {tex_image_size}, grid=64, bilinear upsample)...", flush=True)
     tex_cond, tex_neg_cond = extract_proj_features(
         args.image, dinov3, grid_resolution=64, image_size=tex_image_size,
