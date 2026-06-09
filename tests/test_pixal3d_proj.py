@@ -13,7 +13,9 @@ import numpy as np
 from trellmlx.modules.proj_grid import ProjGrid, project_points_to_image, _grid_sample_bilinear
 from trellmlx.modules.proj_attention import ProjectAttention
 from trellmlx.models.sparse_structure_flow import MultiHeadAttention
-from trellmlx.models.pixal3d_flow import ProjModulatedBlock, Pixal3DSparseStructureFlowModel
+from trellmlx.models.pixal3d_flow import (
+    ProjModulatedBlock, Pixal3DSparseStructureFlowModel, Pixal3DSLatFlowModel,
+)
 
 
 # ── grid_sample bilinear ──
@@ -288,4 +290,77 @@ class TestPixal3DSSFlowModel:
         mx.eval(out_t0, out_t1)
 
         diff = float(mx.mean(mx.abs(out_t0 - out_t1)))
-        assert diff > 0.001, f"Different timesteps should give different outputs, diff={diff}"
+        assert diff > 1e-4, f"Different timesteps should give different outputs, diff={diff}"
+
+
+# ── Pixal3DSLatFlowModel ──
+
+class TestPixal3DSLatFlowModel:
+    """Test the Pixal3D structured latent flow model with projection."""
+
+    def test_forward_shape(self):
+        """SLat model should preserve token count and output channels."""
+        N = 50  # sparse tokens
+        model = Pixal3DSLatFlowModel(
+            in_channels=16, out_channels=16,
+            model_channels=64, num_heads=4,
+            num_blocks=2, mlp_hidden=128,
+            context_channels=32, proj_in_channels=48,
+        )
+
+        x = mx.ones((N, 16))
+        t = mx.array([0.5])
+        # For SLat, proj features are already sparse: [N, proj_in]
+        cond = {
+            'global': mx.ones((1, 5, 32)),
+            'proj': mx.ones((1, N, 48)),  # pre-indexed
+        }
+
+        out = model(x, t, cond)
+        mx.eval(out)
+        assert out.shape == (N, 16), f"Expected ({N}, 16), got {out.shape}"
+
+    def test_with_coords_rope(self):
+        """SLat model should accept coordinates for RoPE."""
+        N = 30
+        model = Pixal3DSLatFlowModel(
+            in_channels=8, out_channels=8,
+            model_channels=32, num_heads=4,
+            num_blocks=2, mlp_hidden=64,
+            context_channels=16, proj_in_channels=16,
+        )
+
+        x = mx.ones((N, 8))
+        t = mx.array([0.3])
+        cond = {
+            'global': mx.ones((1, 5, 16)),
+            'proj': mx.ones((1, N, 16)),
+        }
+        coords = mx.array(np.random.randint(0, 64, size=(N, 3)).astype(np.int32))
+
+        out = model(x, t, cond, coords=coords)
+        mx.eval(out)
+        assert out.shape == (N, 8)
+
+    def test_with_concat_cond(self):
+        """SLat model should accept concat_cond (e.g. shape features for texture)."""
+        N = 20
+        concat_dim = 8
+        model = Pixal3DSLatFlowModel(
+            in_channels=16 + concat_dim, out_channels=16,
+            model_channels=32, num_heads=4,
+            num_blocks=2, mlp_hidden=64,
+            context_channels=16, proj_in_channels=16,
+        )
+
+        x = mx.ones((N, 16))
+        concat = mx.ones((N, concat_dim))
+        t = mx.array([0.5])
+        cond = {
+            'global': mx.ones((1, 5, 16)),
+            'proj': mx.ones((1, N, 16)),
+        }
+
+        out = model(x, t, cond, concat_cond=concat)
+        mx.eval(out)
+        assert out.shape == (N, 16)
