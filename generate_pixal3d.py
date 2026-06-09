@@ -159,7 +159,7 @@ def extract_proj_features(image_path, dinov3_model, grid_resolution, image_size,
     return cond, neg_cond
 
 
-def index_proj_by_coords(cond, neg_cond, coords_4d, grid_resolution):
+def index_proj_by_coords(cond, neg_cond, coords_4d, grid_resolution, target_dim=None):
     """Index full-grid projection features by sparse coordinates.
 
     For SLat stages, we need per-token projection features indexed by
@@ -170,6 +170,9 @@ def index_proj_by_coords(cond, neg_cond, coords_4d, grid_resolution):
         neg_cond: dict with 'proj' of shape [1, R^3, D]
         coords_4d: [N, 4] int array (batch, x, y, z)
         grid_resolution: R (grid was R^3)
+        target_dim: If set, zero-pad proj features to this dimension.
+                    Used when model expects NAF-upsampled 2048-dim features
+                    but we provide 1024-dim features without NAF.
 
     Returns:
         sparse_cond, sparse_neg_cond: dicts with 'proj' of shape [1, N, D]
@@ -186,6 +189,15 @@ def index_proj_by_coords(cond, neg_cond, coords_4d, grid_resolution):
     # Index into the grid
     z_proj_grid_np = np.array(z_proj_grid)
     z_proj_sparse = z_proj_grid_np[batch_idx, x_idx, y_idx, z_idx]
+
+    # Zero-pad if model expects wider features (NAF upsample path)
+    if target_dim is not None and z_proj_sparse.shape[-1] < target_dim:
+        pad_width = target_dim - z_proj_sparse.shape[-1]
+        z_proj_sparse = np.concatenate([
+            z_proj_sparse,
+            np.zeros((*z_proj_sparse.shape[:-1], pad_width), dtype=z_proj_sparse.dtype),
+        ], axis=-1)
+
     z_proj_sparse = mx.array(z_proj_sparse)[None]  # [1, N, D]
 
     sparse_cond = {'global': cond['global'], 'proj': z_proj_sparse}
@@ -319,8 +331,312 @@ def main():
         print(f"  Total: {time.perf_counter()-t_total:.1f}s")
         return
 
-    print(f"\n  Total time: {time.perf_counter()-t_total:.1f}s")
-    print("  (Shape/texture stages not yet implemented — SS stage proven!)")
+    # === Stage 2a: LR Shape Latent (proj, 512) ===
+    print("\n=== Stage 2a: LR Shape Latent (proj, 512) ===", flush=True)
+    from trellmlx.models.pixal3d_flow import Pixal3DSLatFlowModel
+    from trellmlx.models.shape_slat_decoder import SLatDecoder
+
+    SHAPE_SAMPLER = dict(steps=12, guidance_strength=7.5, guidance_rescale=0.5,
+                         guidance_interval=(0.6, 1.0), rescale_t=3.0)
+
+    # Extract proj features for shape LR stage (grid=32, image=512, NAF→proj_in=2048)
+    # Note: without NAF upsampling, proj_in=1024. The Pixal3D shape models
+    # use proj_in_channels=2048 (NAF), but we can try with 1024 initially
+    # and zero-pad the second half. For now, use grid_resolution=32.
+    print("  Extracting proj features (shape LR, 512, grid=32)...", flush=True)
+    shape_lr_cond, shape_lr_neg_cond = extract_proj_features(
+        args.image, dinov3, grid_resolution=32, image_size=512,
+        camera_params=camera_params, no_rembg=args.no_rembg,
+    )
+
+    # Index projection features by sparse coordinates
+    N_lr = len(lr_coords)
+    lr_coords_4d = np.column_stack([np.zeros(N_lr, dtype=np.int32), lr_coords])
+    shape_lr_cond_sparse, shape_lr_neg_cond_sparse = index_proj_by_coords(
+        shape_lr_cond, shape_lr_neg_cond, lr_coords_4d, grid_resolution=32,
+        target_dim=2048,
+    )
+
+    # Load LR shape flow (proj_in_channels=2048 for NAF, but we provide 1024)
+    # The model will accept whatever proj_in_channels we configure
+    lr_slat_flow = Pixal3DSLatFlowModel(
+        in_channels=32, out_channels=32,
+        model_channels=1536, num_heads=12,
+        num_blocks=30, mlp_hidden=8192,
+        context_channels=1024, proj_in_channels=2048,
+    )
+    load_weights(lr_slat_flow, HF_PIXAL3D + "slat_flow_img2shape_dit_1_3B_512_bf16.safetensors", verbose=False)
+
+    lr_noise = mx.random.normal((N_lr, 32))
+    t0 = time.perf_counter()
+    lr_slat = flow_euler_sample(
+        lr_slat_flow, lr_noise, shape_lr_cond_sparse, shape_lr_neg_cond_sparse,
+        verbose=False, coords=mx.array(lr_coords),
+        **SHAPE_SAMPLER,
+    )
+    mx.eval(lr_slat)
+    print(f"  Sampled: {time.perf_counter()-t0:.1f}s ({N_lr} tokens)", flush=True)
+
+    lr_slat = _denormalize_slat(lr_slat)
+    mx.eval(lr_slat)
+
+    cleanup_model(lr_slat_flow)
+    del lr_slat_flow
+    gc.collect()
+
+    # === Stage 2b: Upsample to HR coordinates ===
+    print("\n=== Stage 2b: Upsample → HR coordinates ===", flush=True)
+
+    shape_dec_ckpt = HF_PIXAL3D + "shape_dec_next_dc_f16c32_fp16.safetensors"
+    decoder = SLatDecoder(out_channels=7, pred_subdiv=True)
+    load_weights(decoder, shape_dec_ckpt, verbose=False)
+
+    t0 = time.perf_counter()
+    hr_coords_raw = decoder.upsample(lr_slat, mx.array(lr_coords_4d), upsample_times=4)
+    mx.eval(hr_coords_raw)
+    print(f"  Upsampled: {time.perf_counter()-t0:.1f}s ({hr_coords_raw.shape[0]:,} voxels)", flush=True)
+
+    decoder_output_res = lr_resolution * 16  # 32 * 16 = 512
+    hr_resolution = args.resolution
+    hr_coords_np = np.array(hr_coords_raw)
+    while True:
+        quant_coords = _requantize_coords(hr_coords_np, decoder_output_res, hr_resolution)
+        num_tokens = len(quant_coords)
+        if num_tokens < args.max_tokens or hr_resolution == 1024:
+            if hr_resolution != args.resolution:
+                print(f"  Resolution reduced to {hr_resolution} ({num_tokens:,} tokens)", flush=True)
+            break
+        hr_resolution -= 128
+
+    hr_coords_3d = quant_coords[:, 1:4]
+    print(f"  HR coords: {num_tokens:,} tokens at res {hr_resolution}", flush=True)
+
+    cleanup_model(decoder)
+    del decoder
+    gc.collect()
+
+    # === Stage 2c: HR Shape Latent (proj, 1024) ===
+    print("\n=== Stage 2c: HR Shape Latent (proj, 1024) ===", flush=True)
+
+    # Extract proj features for shape HR stage
+    # Upstream uses image_size=1024, grid=64, but DINOv3 at 1024x1024 is
+    # very memory-intensive on unified memory Macs (4096 patches, O(n²) attention).
+    # Use 512 image with grid=64 as a practical tradeoff for now.
+    hr_image_size = 512  # TODO: 1024 with memory optimization
+    print(f"  Extracting proj features (shape HR, {hr_image_size}, grid=64)...", flush=True)
+    shape_hr_cond, shape_hr_neg_cond = extract_proj_features(
+        args.image, dinov3, grid_resolution=64, image_size=hr_image_size,
+        camera_params=camera_params, no_rembg=args.no_rembg,
+    )
+
+    # Index by HR sparse coordinates
+    shape_hr_cond_sparse, shape_hr_neg_cond_sparse = index_proj_by_coords(
+        shape_hr_cond, shape_hr_neg_cond, quant_coords, grid_resolution=64,
+        target_dim=2048,
+    )
+
+    hr_slat_flow = Pixal3DSLatFlowModel(
+        in_channels=32, out_channels=32,
+        model_channels=1536, num_heads=12,
+        num_blocks=30, mlp_hidden=8192,
+        context_channels=1024, proj_in_channels=2048,
+    )
+    load_weights(hr_slat_flow, HF_PIXAL3D + "slat_flow_img2shape_dit_1_3B_1024_bf16.safetensors", verbose=False)
+
+    hr_noise = mx.random.normal((num_tokens, 32))
+    t0 = time.perf_counter()
+    hr_slat = flow_euler_sample(
+        hr_slat_flow, hr_noise, shape_hr_cond_sparse, shape_hr_neg_cond_sparse,
+        verbose=False, coords=mx.array(hr_coords_3d),
+        **SHAPE_SAMPLER,
+    )
+    mx.eval(hr_slat)
+    print(f"  Sampled: {time.perf_counter()-t0:.1f}s ({num_tokens:,} tokens)", flush=True)
+
+    hr_slat = _denormalize_slat(hr_slat)
+    mx.eval(hr_slat)
+
+    cleanup_model(hr_slat_flow)
+    del hr_slat_flow
+    gc.collect()
+
+    # === Stage 3: Shape Decode ===
+    print("\n=== Stage 3: Decode Shape ===", flush=True)
+
+    shape_decoder = SLatDecoder(out_channels=7, pred_subdiv=True)
+    load_weights(shape_decoder, shape_dec_ckpt, verbose=False)
+
+    t0 = time.perf_counter()
+    dec_out, dec_coords, shape_subs = shape_decoder(
+        hr_slat, mx.array(quant_coords), return_subs=True,
+    )
+    mx.eval(dec_out)
+    print(f"  Decoded: {time.perf_counter()-t0:.1f}s ({dec_out.shape[0]:,} voxels)", flush=True)
+
+    cleanup_model(shape_decoder)
+    del shape_decoder
+    gc.collect()
+
+    # === Mesh Extraction ===
+    print("\n=== Mesh Extraction ===", flush=True)
+    from trellmlx.mesh_extract import decoder_output_to_mesh
+
+    dec_coords_np = np.array(dec_coords)
+    dec_feats_np = np.array(dec_out)
+
+    mesh_grid_size = hr_resolution
+    t0 = time.perf_counter()
+    vertices, faces = decoder_output_to_mesh(
+        dec_feats_np, dec_coords_np, resolution=mesh_grid_size,
+    )
+    print(f"  Extracted: {time.perf_counter()-t0:.1f}s ({len(vertices):,}V {len(faces):,}F)", flush=True)
+
+    if not args.no_cleanup:
+        from trellmlx.mesh_cleanup import cleanup_mesh
+        t0 = time.perf_counter()
+        vertices, faces = cleanup_mesh(vertices, faces, keep_largest=args.keep_largest)
+        print(f"  Cleanup: {time.perf_counter()-t0:.1f}s ({len(vertices):,}V {len(faces):,}F)", flush=True)
+
+    if args.target_faces and len(faces) > args.target_faces:
+        import fast_simplification
+        ratio = args.target_faces / len(faces)
+        vertices, faces = fast_simplification.simplify(vertices, faces, target_reduction=1.0 - ratio)
+        print(f"  Simplified: {len(vertices):,}V {len(faces):,}F", flush=True)
+
+    # === Stage 4: Texture (proj, 1024) ===
+    print("\n=== Stage 4: Texture SLat (proj, 1024) ===", flush=True)
+
+    TEX_SAMPLER = dict(steps=12, guidance_strength=1.0, guidance_rescale=0.0,
+                       guidance_interval=(0.6, 0.9), rescale_t=3.0)
+
+    # Extract proj features for texture stage
+    # Same image_size tradeoff as shape HR
+    tex_image_size = 512  # TODO: 1024 with memory optimization
+    print(f"  Extracting proj features (tex, {tex_image_size}, grid=64)...", flush=True)
+    tex_cond, tex_neg_cond = extract_proj_features(
+        args.image, dinov3, grid_resolution=64, image_size=tex_image_size,
+        camera_params=camera_params, no_rembg=args.no_rembg,
+    )
+    tex_cond_sparse, tex_neg_cond_sparse = index_proj_by_coords(
+        tex_cond, tex_neg_cond, quant_coords, grid_resolution=64,
+        target_dim=2048,
+    )
+
+    tex_flow = Pixal3DSLatFlowModel(
+        in_channels=64, out_channels=32,
+        model_channels=1536, num_heads=12,
+        num_blocks=30, mlp_hidden=8192,
+        context_channels=1024, proj_in_channels=2048,
+    )
+    load_weights(tex_flow, HF_PIXAL3D + "slat_flow_imgshape2tex_dit_1_3B_1024_bf16.safetensors", verbose=False)
+
+    # Re-normalize shape SLat for texture conditioning
+    shape_cond = _normalize_slat(hr_slat)
+    mx.eval(shape_cond)
+
+    tex_noise = mx.random.normal((num_tokens, 32))
+    t0 = time.perf_counter()
+    tex_slat = flow_euler_sample(
+        tex_flow, tex_noise, tex_cond_sparse, tex_neg_cond_sparse,
+        verbose=False, coords=mx.array(hr_coords_3d),
+        concat_cond=shape_cond,
+        **TEX_SAMPLER,
+    )
+    mx.eval(tex_slat)
+    print(f"  Sampled: {time.perf_counter()-t0:.1f}s ({num_tokens:,} tokens)", flush=True)
+
+    tex_slat = _denormalize_slat(tex_slat, mean=TEX_SLAT_MEAN, std=TEX_SLAT_STD)
+    mx.eval(tex_slat)
+
+    cleanup_model(tex_flow)
+    del tex_flow
+    gc.collect()
+
+    # === Stage 5: Texture Decode ===
+    print("\n=== Stage 5: Texture Decode ===", flush=True)
+
+    tex_dec_ckpt = HF_PIXAL3D + "tex_dec_next_dc_f16c32_fp16.safetensors"
+    if not os.path.exists(tex_dec_ckpt):
+        # Fall back to TRELLIS.2 tex decoder if Pixal3D's isn't downloaded yet
+        HF_4B = os.path.expanduser(
+            "~/.cache/huggingface/hub/models--microsoft--TRELLIS.2-4B/"
+            "snapshots/af44b45f2e35a493886929c6d786e563ec68364d/ckpts/"
+        )
+        tex_dec_ckpt = HF_4B + "tex_dec_next_dc_f16c32_fp16.safetensors"
+
+    tex_decoder = SLatDecoder(out_channels=6, pred_subdiv=False)
+    load_weights(tex_decoder, tex_dec_ckpt, verbose=False)
+
+    t0 = time.perf_counter()
+    tex_out, tex_coords = tex_decoder(
+        tex_slat, mx.array(quant_coords), guide_subs=shape_subs,
+    )
+    mx.eval(tex_out)
+    tex_out = tex_out * 0.5 + 0.5
+    mx.eval(tex_out)
+    print(f"  Decoded: {time.perf_counter()-t0:.1f}s ({tex_out.shape[0]:,} voxels)", flush=True)
+
+    cleanup_model(tex_decoder)
+    del tex_decoder
+    gc.collect()
+
+    # === Stage 6: Texture Bake + GLB Export ===
+    print("\n=== Stage 6: Texture Bake + GLB ===", flush=True)
+    from trellmlx.texture_bake import uv_unwrap, bake_texture
+    import trimesh
+    from trimesh.visual.material import PBRMaterial
+
+    tex_np = np.array(tex_out)
+    tex_coords_spatial = np.array(tex_coords)[:, 1:4]  # drop batch dim
+
+    # UV unwrap
+    t0 = time.perf_counter()
+    uv_verts, uv_faces, uvs, vmapping = uv_unwrap(vertices, faces)
+    print(f"  UV unwrap: {len(uv_verts):,}V {len(uv_faces):,}F "
+          f"({time.perf_counter()-t0:.1f}s)", flush=True)
+
+    # Bake PBR textures
+    base_color, metallic_roughness, alpha_mode = bake_texture(
+        uv_verts, uv_faces, uvs, vmapping,
+        tex_coords_spatial, tex_np, mesh_grid_size,
+        texture_size=args.texture_size,
+        backend="gpu",
+    )
+    print(f"  Baked textures ({args.texture_size}x{args.texture_size})", flush=True)
+
+    # Export GLB
+    # Swap Y/Z axes for GLB (matches reference coordinate convention)
+    export_verts = uv_verts.copy()
+    export_verts[:, 1], export_verts[:, 2] = uv_verts[:, 2].copy(), -uv_verts[:, 1].copy()
+
+    export_uvs = uvs.copy()
+    export_uvs[:, 1] = 1 - export_uvs[:, 1]
+
+    mesh = trimesh.Trimesh(vertices=export_verts, faces=uv_faces, process=False)
+    normals = mesh.vertex_normals
+
+    material = PBRMaterial(
+        baseColorTexture=Image.fromarray(base_color),
+        baseColorFactor=np.array([255, 255, 255, 255], dtype=np.uint8),
+        metallicRoughnessTexture=Image.fromarray(metallic_roughness),
+        metallicFactor=1.0,
+        roughnessFactor=1.0,
+        alphaMode=alpha_mode,
+        doubleSided=True,
+    )
+
+    textured_mesh = trimesh.Trimesh(
+        vertices=export_verts,
+        faces=uv_faces,
+        vertex_normals=normals,
+        process=False,
+        visual=trimesh.visual.TextureVisuals(uv=export_uvs, material=material),
+    )
+
+    os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
+    textured_mesh.export(args.output)
+    print(f"\n  Saved: {args.output}")
+    print(f"  Total: {time.perf_counter()-t_total:.1f}s")
 
 
 if __name__ == "__main__":
