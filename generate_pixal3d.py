@@ -579,8 +579,24 @@ def main():
         tex_slat, mx.array(quant_coords), guide_subs=shape_subs,
     )
     mx.eval(tex_out)
+
+    # Diagnostic: raw decoder output before transform
+    tex_raw_np = np.array(tex_out)
+    print(f"  Raw decoder output stats (before * 0.5 + 0.5):", flush=True)
+    for ch, name in enumerate(['R', 'G', 'B', 'metallic', 'roughness', 'alpha']):
+        vals = tex_raw_np[:, ch]
+        print(f"    {name}: [{vals.min():.3f}, {vals.max():.3f}] mean={vals.mean():.3f}", flush=True)
+
     tex_out = tex_out * 0.5 + 0.5
     mx.eval(tex_out)
+
+    # Diagnostic: after transform
+    tex_np_check = np.array(tex_out)
+    print(f"  After * 0.5 + 0.5:", flush=True)
+    for ch, name in enumerate(['R', 'G', 'B', 'metallic', 'roughness', 'alpha']):
+        vals = tex_np_check[:, ch]
+        print(f"    {name}: [{vals.min():.3f}, {vals.max():.3f}] mean={vals.mean():.3f}", flush=True)
+
     print(f"  Decoded: {time.perf_counter()-t0:.1f}s ({tex_out.shape[0]:,} voxels)", flush=True)
 
     cleanup_model(tex_decoder)
