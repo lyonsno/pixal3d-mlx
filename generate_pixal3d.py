@@ -108,9 +108,15 @@ def _normalize_slat(slat, mean=SHAPE_SLAT_MEAN, std=SHAPE_SLAT_STD):
 
 
 def _requantize_coords(hr_coords_np, lr_resolution, hr_resolution):
-    """Requantize decoder output coords to target resolution."""
+    """Requantize decoder output coords to target resolution.
+
+    Matches upstream Pixal3D formula:
+        ((coord + 0.5) / lr_resolution * (grid_res - 1)).round().int()
+    where grid_res = hr_resolution // 16.
+    """
+    grid_res = hr_resolution // 16
     spatial = hr_coords_np[:, 1:4].astype(np.float64)
-    spatial = ((spatial + 0.5) / lr_resolution * (hr_resolution // 16)).astype(np.int32)
+    spatial = np.round((spatial + 0.5) / lr_resolution * (grid_res - 1)).astype(np.int32)
     result = hr_coords_np.copy()
     result[:, 1:4] = spatial
     return np.unique(result, axis=0)
