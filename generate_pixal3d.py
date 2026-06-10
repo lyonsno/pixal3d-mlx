@@ -242,6 +242,8 @@ def main():
     parser.add_argument("--no-cleanup", action="store_true")
     parser.add_argument("--keep-largest", action="store_true")
     parser.add_argument("--texture-size", type=int, default=1024)
+    parser.add_argument("--quantize", type=int, default=0, choices=[0, 4, 8],
+                        help="Quantize flow models (0=off, 4=INT4, 8=INT8). Reduces memory ~4-6x.")
     parser.add_argument("--ss-only", action="store_true",
                         help="Run only sparse structure stage (for debugging)")
     args = parser.parse_args()
@@ -352,6 +354,9 @@ def main():
         resolution=16,
     )
     load_weights(ss_flow, HF_PIXAL3D + "ss_flow_img_dit_1_3B_64_bf16.safetensors", verbose=False)
+    if args.quantize:
+        from trellmlx.quantize import quantize_model
+        quantize_model(ss_flow, bits=args.quantize)
 
     # SS sampler params from Pixal3D pipeline.json
     SS_SAMPLER = dict(steps=12, guidance_strength=7.5, guidance_rescale=0.7,
@@ -436,6 +441,8 @@ def main():
         context_channels=1024, proj_in_channels=2048,
     )
     load_weights(lr_slat_flow, HF_PIXAL3D + "slat_flow_img2shape_dit_1_3B_512_bf16.safetensors", verbose=False)
+    if args.quantize:
+        quantize_model(lr_slat_flow, bits=args.quantize)
 
     lr_noise = mx.random.normal((N_lr, 32))
     t0 = time.perf_counter()
@@ -514,6 +521,8 @@ def main():
         context_channels=1024, proj_in_channels=2048,
     )
     load_weights(hr_slat_flow, HF_PIXAL3D + "slat_flow_img2shape_dit_1_3B_1024_bf16.safetensors", verbose=False)
+    if args.quantize:
+        quantize_model(hr_slat_flow, bits=args.quantize)
 
     hr_noise = mx.random.normal((num_tokens, 32))
     t0 = time.perf_counter()
@@ -634,6 +643,8 @@ def main():
         context_channels=1024, proj_in_channels=2048,
     )
     load_weights(tex_flow, HF_PIXAL3D + "slat_flow_imgshape2tex_dit_1_3B_1024_bf16.safetensors", verbose=False)
+    if args.quantize:
+        quantize_model(tex_flow, bits=args.quantize)
 
     # Re-normalize shape SLat for texture conditioning
     shape_cond = _normalize_slat(hr_slat)
