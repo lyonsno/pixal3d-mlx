@@ -27,25 +27,6 @@ Image → textured 3D mesh with PBR materials. No NVIDIA GPU, no PyTorch — pur
 
 *Single image → textured 3D mesh with PBR materials. ~21 min on M4 Max, 4096 texture, 500K faces. No NVIDIA GPU, no PyTorch — pure MLX on Apple Silicon.*
 
-### TRELLIS.2: Input → Output
-
-<table>
-<tr>
-<td><img src="assets/blender_mlx_preview_paint_more_stone.png" width="240" alt="Input image"></td>
-<td><img src="assets/outputs/blender-ball-angle1.png" width="240" alt="Output angle 1"></td>
-<td><img src="assets/outputs/blender-ball-angle2.png" width="240" alt="Output angle 2"></td>
-<td><img src="assets/outputs/blender-ball-angle3.png" width="240" alt="Output angle 3"></td>
-</tr>
-<tr>
-<td align="center"><em>Input</em></td>
-<td align="center"><em>Generated — front</em></td>
-<td align="center"><em>Generated — side</em></td>
-<td align="center"><em>Generated — back</em></td>
-</tr>
-</table>
-
-*TRELLIS.2 also runs on the same codebase. ~12 min on M4 Max, ~21 min on M2 Pro.*
-
 ## Validation snapshot
 
 Validated end-to-end on Apple Silicon:
