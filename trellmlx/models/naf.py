@@ -328,7 +328,14 @@ class NAF(nn.Module):
         Returns:
             [B, dim, H', W'] encoded features with RoPE
         """
-        # MLX Conv2d works with NHWC, but we need to handle pooling
+        # Pre-downsample if image is >4x target (matches upstream guard)
+        oh, ow = output_size
+        if image.shape[1] > 4 * oh or image.shape[2] > 4 * ow:
+            target_h = min(image.shape[1], 4 * oh, 4 * ow)
+            target_w = min(image.shape[2], 4 * ow, 4 * oh)
+            image = nn.Upsample(scale_factor=target_h / image.shape[1],
+                                mode="linear", align_corners=False)(image)
+
         # Run encoders in NHWC
         enc_1x1 = self._run_encoder(self.encoder_1x1, image)  # [B, H, W, dim//2]
         enc_3x3 = self._run_encoder(self.encoder_3x3, image)  # [B, H, W, dim//2]
