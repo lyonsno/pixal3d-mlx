@@ -235,6 +235,10 @@ def main():
     parser.add_argument("--max-tokens", type=int, default=49152)
     parser.add_argument("--target-faces", type=int, default=200_000)
     parser.add_argument("--no-rembg", action="store_true")
+    parser.add_argument("--save-checkpoints", metavar="DIR",
+                        help="Save intermediate results after each stage")
+    parser.add_argument("--resume", metavar="DIR",
+                        help="Resume from checkpoints in DIR")
     parser.add_argument("--no-cleanup", action="store_true")
     parser.add_argument("--keep-largest", action="store_true")
     parser.add_argument("--texture-size", type=int, default=1024)
@@ -263,6 +267,11 @@ def main():
     from trellmlx.weight_loader import load_weights
     from trellmlx.samplers import flow_euler_sample
     from trellmlx.cleanup import cleanup_model, cleanup
+    from trellmlx.checkpoint import save_checkpoint, load_checkpoint, has_checkpoint
+
+    ckpt_dir = args.save_checkpoints or args.resume
+    save_ckpts = args.save_checkpoints is not None
+    resume = args.resume is not None
 
     # === DINOv3 backbone (shared across stages) ===
     print("=== Loading DINOv3 backbone ===", flush=True)
@@ -348,6 +357,9 @@ def main():
     print(f"  {len(lr_coords)} sparse voxels at {lr_resolution}³", flush=True)
 
     cleanup_model(ss_flow, ss_dec)
+
+    if save_ckpts:
+        save_checkpoint(ckpt_dir, "ss", lr_coords=lr_coords)
 
     if args.ss_only:
         print(f"\n  SS-only mode. {len(lr_coords)} voxels found.")
@@ -490,6 +502,12 @@ def main():
     del hr_slat_flow
     gc.collect()
 
+    if save_ckpts:
+        save_checkpoint(ckpt_dir, "shape_latent",
+                        hr_slat=np.array(hr_slat),
+                        quant_coords=quant_coords,
+                        hr_resolution=hr_resolution)
+
     # === Stage 3: Shape Decode ===
     print("\n=== Stage 3: Decode Shape ===", flush=True)
 
@@ -529,6 +547,16 @@ def main():
         no_cleanup=args.no_cleanup,
         keep_largest=args.keep_largest,
     )
+
+    if save_ckpts:
+        # Save subdivision masks as list of arrays
+        subs_list = [np.array(s) for s in shape_subs] if shape_subs else []
+        save_checkpoint(ckpt_dir, "mesh",
+                        vertices=vertices, faces=faces,
+                        quant_coords=quant_coords,
+                        hr_slat=np.array(hr_slat),
+                        hr_resolution=hr_resolution)
+        save_checkpoint(ckpt_dir, "shape_subs", subs=subs_list)
 
     # === Stage 4: Texture (proj, 1024) ===
     print("\n=== Stage 4: Texture SLat (proj, 1024) ===", flush=True)
@@ -642,6 +670,11 @@ def main():
     cleanup_model(tex_decoder)
     del tex_decoder
     gc.collect()
+
+    if save_ckpts:
+        save_checkpoint(ckpt_dir, "texture",
+                        tex_out=np.array(tex_out),
+                        tex_coords=np.array(tex_coords))
 
     # === Stage 6: Texture Bake + GLB Export ===
     print("\n=== Stage 6: Texture Bake + GLB ===", flush=True)
