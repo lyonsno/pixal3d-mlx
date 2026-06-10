@@ -20,11 +20,24 @@ _KEY_MAP = {
     "image_encoder.rope.": "rope.",
 }
 
+# The first layer in each encoder is now a ReflectConv2d wrapper,
+# so "encoder_1x1.0.weight" → "encoder_1x1.0.conv.weight"
+_FIRST_CONV_REMAP = {
+    "encoder_1x1.0.weight": "encoder_1x1.0.conv.weight",
+    "encoder_1x1.0.bias": "encoder_1x1.0.conv.bias",
+    "encoder_3x3.0.weight": "encoder_3x3.0.conv.weight",
+    "encoder_3x3.0.bias": "encoder_3x3.0.conv.bias",
+}
+
 
 def _remap_key(key: str) -> str:
     for old, new in _KEY_MAP.items():
         if key.startswith(old):
-            return new + key[len(old):]
+            key = new + key[len(old):]
+            break
+    # Handle ReflectConv2d wrapper for first encoder layers
+    if key in _FIRST_CONV_REMAP:
+        key = _FIRST_CONV_REMAP[key]
     return key
 
 

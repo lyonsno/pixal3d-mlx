@@ -79,31 +79,62 @@ class NAFRoPE(nn.Module):
 
 # ── Convolution blocks ──
 
+def _reflect_pad(x: mx.array, pad: int) -> mx.array:
+    """Reflect-pad spatial dims of NHWC tensor.
+
+    MLX doesn't have mx.flip or mode='reflect', so we use reverse slicing.
+    For pad=1 on a [B, H, W, C] tensor with H=4:
+        top = x[:, 1:2, :, :]  (row 1, reversed = row 1)
+        bottom = x[:, -2:-1, :, :]  (row H-2, reversed = row H-2)
+    """
+    if pad == 0:
+        return x
+    # Reflect-pad H: mirror rows [1..pad] at top, [H-pad-1..H-2] at bottom
+    top = x[:, pad:0:-1, :, :]        # rows pad, pad-1, ..., 1 (reversed)
+    bottom = x[:, -2:-(pad+2):-1, :, :]  # rows H-2, H-3, ..., H-pad-1
+    x = mx.concatenate([top, x, bottom], axis=1)
+    # Reflect-pad W: same for columns
+    left = x[:, :, pad:0:-1, :]
+    right = x[:, :, -2:-(pad+2):-1, :]
+    x = mx.concatenate([left, x, right], axis=2)
+    return x
+
+
 class EncBlock(nn.Module):
-    """Residual conv block with GroupNorm + SiLU."""
+    """Residual conv block with GroupNorm + SiLU + reflect padding."""
 
     def __init__(self, channels: int, kernel_size: int = 3, num_groups: int = 8):
         super().__init__()
-        pad = kernel_size // 2
+        self.pad = kernel_size // 2
         self.norm1 = nn.GroupNorm(num_groups, channels)
-        self.conv1 = nn.Conv2d(channels, channels, kernel_size, padding=pad)
+        self.conv1 = nn.Conv2d(channels, channels, kernel_size, padding=0)
         self.norm2 = nn.GroupNorm(num_groups, channels)
-        self.conv2 = nn.Conv2d(channels, channels, kernel_size, padding=pad)
+        self.conv2 = nn.Conv2d(channels, channels, kernel_size, padding=0)
 
     def __call__(self, x: mx.array) -> mx.array:
-        # MLX Conv2d expects NHWC
         h = nn.silu(self.norm1(x))
-        h = self.conv1(h)
+        h = self.conv1(_reflect_pad(h, self.pad))
         h = nn.silu(self.norm2(h))
-        h = self.conv2(h)
-        return h  # no residual in upstream default (residual=False)
+        h = self.conv2(_reflect_pad(h, self.pad))
+        return h
+
+
+class ReflectConv2d(nn.Module):
+    """Conv2d with reflect padding (matching upstream padding_mode='reflect')."""
+
+    def __init__(self, in_channels, out_channels, kernel_size, bias=True):
+        super().__init__()
+        self.pad = kernel_size // 2
+        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size, padding=0, bias=bias)
+
+    def __call__(self, x):
+        return self.conv(_reflect_pad(x, self.pad))
 
 
 def make_encoder(in_channels: int, out_channels: int, kernel_size: int = 1,
                  ks_res: int = 1, num_layers: int = 2):
-    """Build encoder: Conv2d → EncBlock × num_layers."""
-    pad = kernel_size // 2
-    layers = [nn.Conv2d(in_channels, out_channels, kernel_size, padding=pad)]
+    """Build encoder: ReflectConv2d → EncBlock × num_layers."""
+    layers = [ReflectConv2d(in_channels, out_channels, kernel_size)]
     for _ in range(num_layers):
         layers.append(EncBlock(out_channels, kernel_size=ks_res))
     return layers

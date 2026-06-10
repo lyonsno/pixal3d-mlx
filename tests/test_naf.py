@@ -326,13 +326,13 @@ class TestNAFWeightLoading:
         model = NAF()
         load_naf_weights(model, NAF_WEIGHTS, verbose=False)
 
-        # Check first 1x1 encoder conv weight
-        w = model.encoder_1x1[0].weight
+        # Check first 1x1 encoder conv weight (through ReflectConv2d wrapper)
+        w = model.encoder_1x1[0].conv.weight
         mx.eval(w)
         assert float(mx.mean(mx.abs(w))) > 1e-4, "Encoder weight is trivial"
 
         # Check first 3x3 encoder conv weight
-        w3 = model.encoder_3x3[0].weight
+        w3 = model.encoder_3x3[0].conv.weight
         mx.eval(w3)
         assert float(mx.mean(mx.abs(w3))) > 1e-4, "Sem encoder weight is trivial"
 
@@ -344,13 +344,16 @@ class TestNAFKeyRemapping:
 
     def test_encoder_remap(self):
         from trellmlx.models.naf_loader import _remap_key
-        assert _remap_key("image_encoder.encoder.0.weight") == "encoder_1x1.0.weight"
+        # First layer goes through ReflectConv2d wrapper
+        assert _remap_key("image_encoder.encoder.0.weight") == "encoder_1x1.0.conv.weight"
+        assert _remap_key("image_encoder.encoder.0.bias") == "encoder_1x1.0.conv.bias"
+        # Deeper layers are EncBlocks, no wrapper
         assert _remap_key("image_encoder.encoder.1.conv1.weight") == "encoder_1x1.1.conv1.weight"
         assert _remap_key("image_encoder.encoder.2.norm2.bias") == "encoder_1x1.2.norm2.bias"
 
     def test_sem_encoder_remap(self):
         from trellmlx.models.naf_loader import _remap_key
-        assert _remap_key("image_encoder.sem_encoder.0.weight") == "encoder_3x3.0.weight"
+        assert _remap_key("image_encoder.sem_encoder.0.weight") == "encoder_3x3.0.conv.weight"
         assert _remap_key("image_encoder.sem_encoder.1.conv1.weight") == "encoder_3x3.1.conv1.weight"
 
     def test_rope_remap(self):
