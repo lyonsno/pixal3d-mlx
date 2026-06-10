@@ -178,8 +178,11 @@ def neighborhood_attention(q, k, v, kernel_size, scale, dilation=(1, 1)):
     v_padded = mx.pad(v, [(0,0), (0,0), (pad_h, pad_h), (pad_w, pad_w), (0,0)],
                        mode="edge")
 
-    # For large grids, process in row chunks to avoid OOM
-    CHUNK_ROWS = max(1, min(X, 64))
+    # Process in row chunks to control peak memory.
+    # Each chunk allocates [B, H, chunk, Y, K², D] window tensors.
+    # At chunk=64, Y=512, K²=81, D=1024, H=4: ~27GB per chunk.
+    # At chunk=8: ~3.4GB. At chunk=4: ~1.7GB.
+    CHUNK_ROWS = max(1, min(X, 16))
 
     out_chunks = []
     for row_start in range(0, X, CHUNK_ROWS):
