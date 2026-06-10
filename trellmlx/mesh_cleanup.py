@@ -424,23 +424,7 @@ def fix_normals(
 
     import trimesh
     mesh = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
-    trimesh.repair.fix_normals(mesh)
-
-    # Extra pass: flip faces whose normals point inward (toward centroid).
-    # trimesh's fix_normals uses BFS and can pick wrong seed orientation.
-    centroid = mesh.vertices.mean(axis=0)
-    face_centers = mesh.vertices[mesh.faces].mean(axis=1)  # [F, 3]
-    face_normals = mesh.face_normals  # [F, 3]
-    outward = face_centers - centroid  # vector from centroid to face
-    dot = (face_normals * outward).sum(axis=1)
-    inward_mask = dot < 0
-    n_flipped = inward_mask.sum()
-    if n_flipped > 0 and n_flipped < len(faces) * 0.9:
-        # Only flip if it's a minority — if >90% point inward the centroid heuristic is wrong
-        mesh.faces[inward_mask] = mesh.faces[inward_mask][:, ::-1]
-        if verbose:
-            print(f"  Flipped {n_flipped:,} inward-facing normals", flush=True)
-
+    trimesh.repair.fix_normals(mesh, multibody=True)
     # np.array() to avoid returning trimesh TrackedArray (carries refs to Trimesh)
     return np.array(mesh.vertices, dtype=vertices.dtype), np.array(mesh.faces, dtype=faces.dtype)
 
