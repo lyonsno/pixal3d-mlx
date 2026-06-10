@@ -10,20 +10,22 @@ Image → textured 3D mesh with PBR materials. No NVIDIA GPU, no PyTorch — pur
 
 <table>
 <tr>
-<td><img src="assets/slate_ball_input.jpeg" width="180" alt="Input image"></td>
-<td><img src="assets/outputs/slate_ball_front.png" width="220" alt="Output front"></td>
-<td><img src="assets/outputs/slate_ball_angle.png" width="220" alt="Output angle"></td>
-<td><img src="assets/outputs/slate_ball_back.png" width="220" alt="Output back"></td>
+<td><img src="assets/outputs/pixal3d_input.jpg" width="180" alt="Input image"></td>
+<td><img src="assets/outputs/pixal3d_render_1.png" width="180" alt="Output 1"></td>
+<td><img src="assets/outputs/pixal3d_render_2.png" width="180" alt="Output 2"></td>
+<td><img src="assets/outputs/pixal3d_render_3.png" width="180" alt="Output 3"></td>
+<td><img src="assets/outputs/pixal3d_render_4.png" width="180" alt="Output 4"></td>
 </tr>
 <tr>
 <td align="center"><em>Input</em></td>
-<td align="center"><em>Generated — front</em></td>
-<td align="center"><em>Generated — angle</em></td>
-<td align="center"><em>Generated — back</em></td>
+<td align="center"><em>Generated</em></td>
+<td align="center"><em>Generated</em></td>
+<td align="center"><em>Generated</em></td>
+<td align="center"><em>Generated</em></td>
 </tr>
 </table>
 
-*Single image → textured 3D mesh with PBR materials. ~21 min on M4 Max. No NVIDIA GPU, no PyTorch — pure MLX on Apple Silicon.*
+*Single image → textured 3D mesh with PBR materials. ~21 min on M4 Max, 4096 texture, 500K faces. No NVIDIA GPU, no PyTorch — pure MLX on Apple Silicon.*
 
 ### TRELLIS.2: Input → Output
 
