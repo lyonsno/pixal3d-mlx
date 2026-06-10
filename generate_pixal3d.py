@@ -248,6 +248,7 @@ def main():
 
     mx.random.seed(args.seed)
     t_total = time.perf_counter()
+    mx.metal.reset_peak_memory()
 
     # Camera parameters
     if args.fov > 0:
@@ -731,8 +732,10 @@ def main():
 
     os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
     textured_mesh.export(args.output)
+    peak_mem = mx.metal.get_peak_memory() / 1e9
     print(f"\n  Saved: {args.output}")
     print(f"  Total: {time.perf_counter()-t_total:.1f}s")
+    print(f"  Peak GPU memory: {peak_mem:.1f} GB")
 
 
 if __name__ == "__main__":
