@@ -271,8 +271,25 @@ def main():
     from trellmlx.checkpoint import save_checkpoint, load_checkpoint, has_checkpoint
 
     ckpt_dir = args.save_checkpoints or args.resume
-    save_ckpts = args.save_checkpoints is not None
+    save_ckpts = args.save_checkpoints is not None or args.resume is not None
     resume = args.resume is not None
+
+    # === Resume detection ===
+    resume_from = None
+    if resume:
+        from trellmlx.checkpoint import list_checkpoints
+        available = list_checkpoints(ckpt_dir)
+        print(f"  Resume: found checkpoints {available}", flush=True)
+        # Pick the most advanced checkpoint to resume from
+        # Priority: mesh > texture > shape_latent > ss
+        for stage in ['mesh', 'texture', 'shape_latent', 'ss']:
+            if has_checkpoint(ckpt_dir, stage):
+                resume_from = stage
+                break
+        if resume_from:
+            print(f"  Resuming from: {resume_from}", flush=True)
+        else:
+            print("  No usable checkpoints found, running from scratch.", flush=True)
 
     # === DINOv3 backbone (shared across stages) ===
     print("=== Loading DINOv3 backbone ===", flush=True)
@@ -301,10 +318,24 @@ def main():
     load_naf_weights(naf, NAF_WEIGHTS, verbose=False)
     print("  NAF loaded (37 params, 2.7MB).", flush=True)
 
-    # === Stage 1: Sparse Structure (proj) ===
-    print("\n=== Stage 1: Sparse Structure (proj) ===", flush=True)
-    from trellmlx.models.pixal3d_flow import Pixal3DSparseStructureFlowModel
-    from trellmlx.models.sparse_structure_decoder import SparseStructureDecoder
+    # === Resume: skip stages 1-3 if shape_latent checkpoint exists ===
+    skip_to_decode = resume_from in ('shape_latent', 'mesh', 'texture')
+
+    if skip_to_decode:
+        print(f"\n=== Skipping stages 1-3 (resuming from {resume_from}) ===", flush=True)
+        ckpt = load_checkpoint(ckpt_dir, 'shape_latent')
+        hr_slat = mx.array(ckpt['hr_slat'])
+        quant_coords = ckpt['quant_coords']
+        hr_coords_3d = quant_coords[:, 1:4]
+        hr_resolution = int(ckpt['hr_resolution'])
+        num_tokens = len(quant_coords)
+        print(f"  Loaded shape_latent: {num_tokens:,} tokens, res {hr_resolution}", flush=True)
+
+    if not skip_to_decode:
+        # === Stage 1: Sparse Structure (proj) ===
+        print("\n=== Stage 1: Sparse Structure (proj) ===", flush=True)
+        from trellmlx.models.pixal3d_flow import Pixal3DSparseStructureFlowModel
+        from trellmlx.models.sparse_structure_decoder import SparseStructureDecoder
 
     # Extract features for SS stage (grid_resolution=16, image_size=512)
     print("  Extracting proj features (SS, 512, grid=16)...", flush=True)
@@ -509,11 +540,18 @@ def main():
     gc.collect()
     mx.metal.clear_cache()
 
-    if save_ckpts:
+    if save_ckpts and not skip_to_decode:
         save_checkpoint(ckpt_dir, "shape_latent",
                         hr_slat=np.array(hr_slat),
                         quant_coords=quant_coords,
                         hr_resolution=hr_resolution)
+
+    # (end of skip_to_decode guard — stages 1-3 skipped if resuming)
+
+    # Need these imports and paths regardless of resume path
+    from trellmlx.models.pixal3d_flow import Pixal3DSLatFlowModel
+    from trellmlx.models.shape_slat_decoder import SLatDecoder
+    shape_dec_ckpt = HF_PIXAL3D + "shape_dec_next_dc_f16c32_fp16.safetensors"
 
     # === Stage 3: Shape Decode ===
     print("\n=== Stage 3: Decode Shape ===", flush=True)
