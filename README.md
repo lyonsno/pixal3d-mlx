@@ -1,12 +1,31 @@
-# trellis2mlx
+# pixal3d-mlx
 
-MLX-native [TRELLIS.2](https://github.com/microsoft/TRELLIS.2) inference for Apple Silicon.
+MLX-native [Pixal3D](https://github.com/TencentARC/Pixal3D) (SIGGRAPH 2026) + [TRELLIS.2](https://github.com/microsoft/TRELLIS.2) inference for Apple Silicon.
 
-Run [TRELLIS.2](https://github.com/microsoft/TRELLIS.2) 3D generation on Mac using [MLX](https://github.com/ml-explore/mlx). No NVIDIA GPU required. Image -> textured GLB, including native MLX DINOv3 conditioning, sparse/shape/texture stages, mesh extraction, simplification, UV unwrap, and texture baking.
+Image → textured 3D mesh with PBR materials. No NVIDIA GPU, no PyTorch — pure MLX on Metal.
 
-This is a technical preview: the full route works, the output is real, and the public contract is proof-first rather than polished-app-first. Output quality is still seed/input-sensitive, and native-DINO generation parity remains an active quality investigation.
+[Pixal3D](https://github.com/TencentARC/Pixal3D) uses pixel-aligned back-projection conditioning to establish direct pixel-to-3D correspondence, producing dramatically better geometry and texture fidelity than attention-based conditioning alone. This port runs the full pipeline natively on Apple Silicon via [MLX](https://github.com/ml-explore/mlx), including a pure-MLX port of [NAF](https://github.com/valeoai/NAF) (Neural Attention Fields) for feature upsampling.
 
-### Input → Output
+### Pixal3D: Input → Output
+
+<table>
+<tr>
+<td><img src="assets/slate_ball_input.jpeg" width="180" alt="Input image"></td>
+<td><img src="assets/outputs/slate_ball_front.png" width="220" alt="Output front"></td>
+<td><img src="assets/outputs/slate_ball_angle.png" width="220" alt="Output angle"></td>
+<td><img src="assets/outputs/slate_ball_back.png" width="220" alt="Output back"></td>
+</tr>
+<tr>
+<td align="center"><em>Input</em></td>
+<td align="center"><em>Generated — front</em></td>
+<td align="center"><em>Generated — angle</em></td>
+<td align="center"><em>Generated — back</em></td>
+</tr>
+</table>
+
+*Single image → textured 3D mesh with PBR materials. ~21 min on M4 Max. No NVIDIA GPU, no PyTorch — pure MLX on Apple Silicon.*
+
+### TRELLIS.2: Input → Output
 
 <table>
 <tr>
@@ -23,7 +42,7 @@ This is a technical preview: the full route works, the output is real, and the p
 </tr>
 </table>
 
-*Single image → textured 3D mesh with PBR materials. ~12 min on M4 Max, ~21 min on M2 Pro. No NVIDIA GPU, no PyTorch — pure MLX on Apple Silicon.*
+*TRELLIS.2 also runs on the same codebase. ~12 min on M4 Max, ~21 min on M2 Pro.*
 
 ## Validation snapshot
 
