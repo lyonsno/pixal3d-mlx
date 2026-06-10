@@ -1,2 +1,8 @@
 trellis2mlx.egg-info/
 __pycache__/
+
+# Large output artifacts
+outputs/*.glb
+outputs/ckpt_*/
+outputs/*/
+weights/
