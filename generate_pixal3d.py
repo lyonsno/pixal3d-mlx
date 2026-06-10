@@ -529,7 +529,7 @@ def main():
     print(f"  Decoded: {time.perf_counter()-t0:.1f}s ({dec_out.shape[0]:,} voxels)", flush=True)
 
     cleanup_model(shape_decoder)
-    del shape_decoder, dec_out, dec_coords
+    del shape_decoder
     gc.collect()
     mx.metal.clear_cache()
 
@@ -539,6 +539,7 @@ def main():
 
     dec_coords_np = np.array(dec_coords)
     dec_feats_np = np.array(dec_out)
+    del dec_out, dec_coords  # free after converting to numpy
 
     mesh_grid_size = hr_resolution
     t0 = time.perf_counter()
