@@ -358,6 +358,9 @@ def main():
     print(f"  {len(lr_coords)} sparse voxels at {lr_resolution}³", flush=True)
 
     cleanup_model(ss_flow, ss_dec)
+    del ss_flow, ss_dec, ss_cond, ss_neg_cond
+    gc.collect()
+    mx.metal.clear_cache()
 
     if save_ckpts:
         save_checkpoint(ckpt_dir, "ss", lr_coords=lr_coords)
@@ -417,8 +420,9 @@ def main():
     mx.eval(lr_slat)
 
     cleanup_model(lr_slat_flow)
-    del lr_slat_flow
+    del lr_slat_flow, shape_lr_cond, shape_lr_neg_cond, shape_lr_cond_sparse, shape_lr_neg_cond_sparse
     gc.collect()
+    mx.metal.clear_cache()
 
     # === Stage 2b: Upsample to HR coordinates ===
     print("\n=== Stage 2b: Upsample → HR coordinates ===", flush=True)
@@ -450,6 +454,7 @@ def main():
     cleanup_model(decoder)
     del decoder
     gc.collect()
+    mx.metal.clear_cache()
 
     # === Stage 2c: HR Shape Latent (proj, 1024) ===
     print("\n=== Stage 2c: HR Shape Latent (proj, 1024) ===", flush=True)
@@ -500,8 +505,9 @@ def main():
     mx.eval(hr_slat)
 
     cleanup_model(hr_slat_flow)
-    del hr_slat_flow
+    del hr_slat_flow, shape_hr_cond, shape_hr_neg_cond, shape_hr_cond_sparse, shape_hr_neg_cond_sparse
     gc.collect()
+    mx.metal.clear_cache()
 
     if save_ckpts:
         save_checkpoint(ckpt_dir, "shape_latent",
@@ -523,8 +529,9 @@ def main():
     print(f"  Decoded: {time.perf_counter()-t0:.1f}s ({dec_out.shape[0]:,} voxels)", flush=True)
 
     cleanup_model(shape_decoder)
-    del shape_decoder
+    del shape_decoder, dec_out, dec_coords
     gc.collect()
+    mx.metal.clear_cache()
 
     # === Mesh Extraction ===
     print("\n=== Mesh Extraction ===", flush=True)
@@ -621,8 +628,10 @@ def main():
           f"max={tex_dn_np.std(axis=0).max():.4f}", flush=True)
 
     cleanup_model(tex_flow)
-    del tex_flow
+    del tex_flow, tex_cond, tex_neg_cond, tex_cond_sparse, tex_neg_cond_sparse
+    del dinov3, naf  # no longer needed after all extractions done
     gc.collect()
+    mx.metal.clear_cache()
 
     # === Stage 5: Texture Decode ===
     print("\n=== Stage 5: Texture Decode ===", flush=True)
@@ -671,6 +680,7 @@ def main():
     cleanup_model(tex_decoder)
     del tex_decoder
     gc.collect()
+    mx.metal.clear_cache()
 
     if save_ckpts:
         save_checkpoint(ckpt_dir, "texture",
