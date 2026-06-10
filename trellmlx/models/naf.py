@@ -111,12 +111,12 @@ def make_encoder(in_channels: int, out_channels: int, kernel_size: int = 1,
 
 # ── Neighborhood attention as masked full attention ──
 
-def neighborhood_attention(q, k, v, kernel_size, scale):
+def neighborhood_attention(q, k, v, kernel_size, scale, dilation=(1, 1)):
     """Neighborhood attention via gather-based windowed attention.
 
-    Each query attends only to its K×K spatial neighbors. Instead of
-    building a full N×N attention matrix, we gather K² neighbor features
-    per query and compute attention over the window.
+    Each query attends only to its K×K spatial neighbors, with optional
+    dilation. With dilation=d, neighbors are spaced d apart, giving a
+    receptive field of (K*d - d + 1) × (K*d - d + 1).
 
     O(N × K²) instead of O(N²). Works for any grid size.
 
@@ -126,6 +126,7 @@ def neighborhood_attention(q, k, v, kernel_size, scale):
         v: [B, H, X, Y, Dv] values (may differ from Dq)
         kernel_size: (Kh, Kw) or int neighborhood size
         scale: attention scale factor
+        dilation: (dh, dw) dilation factor for the neighborhood window
 
     Returns:
         [B, H, X, Y, Dv] output
@@ -133,44 +134,51 @@ def neighborhood_attention(q, k, v, kernel_size, scale):
     B, nH, X, Y, Dq = q.shape
     Dv = v.shape[-1]
     Kh, Kw = kernel_size if isinstance(kernel_size, (tuple, list)) else (kernel_size, kernel_size)
+    dh, dw = dilation if isinstance(dilation, (tuple, list)) else (dilation, dilation)
     half_kh, half_kw = Kh // 2, Kw // 2
 
+    # With dilation, the effective padding needed is half_k * dilation
+    pad_h = half_kh * dh
+    pad_w = half_kw * dw
+
     # Pad K and V so boundary positions have full neighborhoods
-    k_padded = mx.pad(k, [(0,0), (0,0), (half_kh, half_kh), (half_kw, half_kw), (0,0)],
+    k_padded = mx.pad(k, [(0,0), (0,0), (pad_h, pad_h), (pad_w, pad_w), (0,0)],
                        mode="edge")
-    v_padded = mx.pad(v, [(0,0), (0,0), (half_kh, half_kh), (half_kw, half_kw), (0,0)],
+    v_padded = mx.pad(v, [(0,0), (0,0), (pad_h, pad_h), (pad_w, pad_w), (0,0)],
                        mode="edge")
 
     # For large grids, process in row chunks to avoid OOM
-    # Each chunk processes CHUNK_ROWS rows of the output
-    CHUNK_ROWS = max(1, min(X, 64))  # Process up to 64 rows at a time
+    CHUNK_ROWS = max(1, min(X, 64))
 
     out_chunks = []
     for row_start in range(0, X, CHUNK_ROWS):
         row_end = min(row_start + CHUNK_ROWS, X)
         chunk_x = row_end - row_start
 
-        # Extract neighbor windows for this chunk of rows
+        # Extract neighbor windows with dilation
+        # Neighbor offsets: di * dh for i in range(Kh), dj * dw for j in range(Kw)
         k_windows = []
         v_windows = []
         for di in range(Kh):
             for dj in range(Kw):
-                k_windows.append(k_padded[:, :, row_start + di:row_start + di + chunk_x, dj:dj+Y, :])
-                v_windows.append(v_padded[:, :, row_start + di:row_start + di + chunk_x, dj:dj+Y, :])
+                offset_h = di * dh
+                offset_w = dj * dw
+                k_windows.append(k_padded[:, :, row_start + offset_h:row_start + offset_h + chunk_x, offset_w:offset_w + Y, :])
+                v_windows.append(v_padded[:, :, row_start + offset_h:row_start + offset_h + chunk_x, offset_w:offset_w + Y, :])
 
-        k_nbr = mx.stack(k_windows, axis=4)  # [B, H, chunk_x, Y, K², Dq]
-        v_nbr = mx.stack(v_windows, axis=4)  # [B, H, chunk_x, Y, K², Dv]
+        k_nbr = mx.stack(k_windows, axis=4)
+        v_nbr = mx.stack(v_windows, axis=4)
 
-        q_chunk = q[:, :, row_start:row_end, :, :]  # [B, H, chunk_x, Y, Dq]
-        q_exp = q_chunk[:, :, :, :, None, :]  # [B, H, chunk_x, Y, 1, Dq]
+        q_chunk = q[:, :, row_start:row_end, :, :]
+        q_exp = q_chunk[:, :, :, :, None, :]
 
         attn = (q_exp @ k_nbr.transpose(0, 1, 2, 3, 5, 4)) * scale
         attn = mx.softmax(attn, axis=-1)
-        chunk_out = (attn @ v_nbr).squeeze(4)  # [B, H, chunk_x, Y, Dv]
+        chunk_out = (attn @ v_nbr).squeeze(4)
         out_chunks.append(chunk_out)
-        mx.eval(chunk_out)  # Evaluate each chunk to free memory
+        mx.eval(chunk_out)
 
-    return mx.concatenate(out_chunks, axis=2)  # [B, H, X, Y, Dv]
+    return mx.concatenate(out_chunks, axis=2)
 
 
 # ── Cross Attention ──
@@ -221,9 +229,12 @@ class NAFCrossAttention(nn.Module):
         dv = Cv // n
         v_up = v_up.reshape(B, n, dv, Hq, Wq).transpose(0, 1, 3, 4, 2)
 
-        # Neighborhood attention: Q·K gives attention weights, applied to V
-        # Q and K have head_dim dq, V has head_dim dv — this is cross-attention
-        out = neighborhood_attention(q, k_up, v_up, self.kernel_size, self.scale)
+        # Dilation from resolution ratio — each query's K×K window is spaced
+        # dilation apart, covering the full original-resolution neighborhood
+        dilation = (Hq // Hk, Wq // Wk)
+
+        # Neighborhood attention with dilation
+        out = neighborhood_attention(q, k_up, v_up, self.kernel_size, self.scale, dilation=dilation)
 
         # Reshape back to [B, Cv, Hq, Wq]
         out = out.transpose(0, 1, 4, 2, 3).reshape(B, Cv, Hq, Wq)
