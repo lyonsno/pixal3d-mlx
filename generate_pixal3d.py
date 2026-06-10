@@ -539,11 +539,14 @@ def main():
     # Extract proj features for texture stage
     # Same image_size tradeoff as shape HR
     tex_image_size = 1024
-    print(f"  Extracting proj features (tex, {tex_image_size}, grid=64, NAF upsample to 1024)...", flush=True)
+    # Upstream uses NAF to 1024 for texture, but that's too large for
+    # windowed attention on unified memory (GPU page fault). Use 512.
+    tex_naf_size = 512
+    print(f"  Extracting proj features (tex, {tex_image_size}, grid=64, NAF upsample to {tex_naf_size})...", flush=True)
     tex_cond, tex_neg_cond = extract_proj_features(
         args.image, dinov3, grid_resolution=64, image_size=tex_image_size,
         camera_params=camera_params, no_rembg=args.no_rembg,
-        use_naf_upsample=True, upsample_target_size=1024, naf_model=naf,
+        use_naf_upsample=True, upsample_target_size=tex_naf_size, naf_model=naf,
     )
     tex_cond_sparse, tex_neg_cond_sparse = index_proj_by_coords(
         tex_cond, tex_neg_cond, quant_coords, grid_resolution=64,
