@@ -31,7 +31,9 @@ def uv_unwrap(vertices, faces):
 
     atlas = xatlas.Atlas()
     atlas.add_mesh(vertices.astype(np.float32), faces.astype(np.uint32))
-    atlas.generate()
+    chart_options = xatlas.ChartOptions()
+    chart_options.max_iterations = 0  # skip slow chart optimization (1/56th time, ~same quality)
+    atlas.generate(chart_options=chart_options)
     vmapping, new_faces, uvs = atlas[0]
 
     new_vertices = vertices[vmapping]
