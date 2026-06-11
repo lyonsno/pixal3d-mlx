@@ -583,22 +583,25 @@ class MoGeModel(nn.Module):
         self.remap_output = "linear"
 
     def _normalized_uv(self, h: int, w: int, aspect_ratio: float) -> mx.array:
-        """Generate normalized UV coordinates for a given resolution.
+        """Generate normalized UV coordinates matching upstream normalized_view_plane_uv().
 
-        Returns [H, W, 2] UV map matching upstream's normalized_view_plane_uv().
+        Upstream formula (geometry_torch.py):
+          span_x = aspect_ratio / sqrt(1 + aspect_ratio^2)
+          span_y = 1 / sqrt(1 + aspect_ratio^2)
+          u = linspace(-span_x * (w-1)/w, +span_x * (w-1)/w, w)
+          v = linspace(-span_y * (h-1)/h, +span_y * (h-1)/h, h)
+
+        Returns [H, W, 2] UV map.
         """
-        u = mx.linspace(0.5 / w, 1 - 0.5 / w, w)
-        v = mx.linspace(0.5 / h, 1 - 0.5 / h, h)
+        diag = math.sqrt(1 + aspect_ratio ** 2)
+        span_u = aspect_ratio / diag
+        span_v = 1.0 / diag
+
+        u = mx.linspace(-span_u * (w - 1) / w, span_u * (w - 1) / w, w)
+        v = mx.linspace(-span_v * (h - 1) / h, span_v * (h - 1) / h, h)
         grid_u, grid_v = mx.meshgrid(u, v, indexing="xy")
 
-        # Normalize to view plane coordinates
-        diag = math.sqrt(1 + aspect_ratio ** 2)
-        uv = mx.stack([
-            (grid_u - 0.5) * aspect_ratio / diag,
-            (grid_v - 0.5) / diag,
-        ], axis=-1)
-
-        return uv
+        return mx.stack([grid_u, grid_v], axis=-1)
 
     def forward(
         self,
@@ -839,12 +842,14 @@ def _recover_focal_shift_np(
     points_ds = points_np[np.ix_(h_idx, w_idx)]
     mask_ds = mask_np[np.ix_(h_idx, w_idx)]
 
-    # UV coordinates
+    # UV coordinates (must match upstream normalized_view_plane_uv)
     diag = math.sqrt(1 + aspect_ratio ** 2)
-    u = np.linspace(0.5 / ds, 1 - 0.5 / ds, ds)
-    v = np.linspace(0.5 / ds, 1 - 0.5 / ds, ds)
+    span_u = aspect_ratio / diag
+    span_v = 1.0 / diag
+    u = np.linspace(-span_u * (ds - 1) / ds, span_u * (ds - 1) / ds, ds)
+    v = np.linspace(-span_v * (ds - 1) / ds, span_v * (ds - 1) / ds, ds)
     gu, gv = np.meshgrid(u, v)
-    uv = np.stack([(gu - 0.5) * aspect_ratio / diag, (gv - 0.5) / diag], axis=-1)
+    uv = np.stack([gu, gv], axis=-1)
 
     if mask_ds.any():
         pts = points_ds[mask_ds]
