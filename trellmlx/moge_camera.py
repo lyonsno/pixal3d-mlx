@@ -1,116 +1,127 @@
-"""MoGe-2 camera parameter estimation for Pixal3D.
+"""MoGe-2 camera estimation for Pixal3D-MLX.
 
-Estimates camera FOV from an input image using MoGe-2 via subprocess.
-No torch dependency in the main process — MoGe runs in a separate
-Python process using PyTorch/MPS.
+Estimates camera intrinsics (FOV) from a single image using MoGe-2,
+matching the upstream Pixal3D camera conditioning pipeline. This is a
+PyTorch/MPS sidecar — MoGe runs on MPS, then results are passed to
+the MLX pipeline as plain Python floats.
 
-If MoGe is not installed, falls back to the default fixed FOV.
+The model loads, infers, and unloads before the MLX pipeline starts,
+so MoGe and the flow models never share GPU memory.
 """
 
-import json
+from __future__ import annotations
+
 import math
-import os
-import subprocess
-import sys
-import tempfile
+import time
+from pathlib import Path
 
 import numpy as np
 
 
-# Inline script that runs MoGe and prints intrinsics as JSON.
-# Runs in a separate process so torch never loads in our MLX process.
-_MOGE_SCRIPT = '''
-import json
-import math
-import sys
-import numpy as np
-from PIL import Image
-
-image_path = sys.argv[1]
-
-import torch
-from moge.model.v2 import MoGeModel
-
-model = MoGeModel.from_pretrained("Ruicheng/moge-2-vitl")
-model = model.to("mps")
-model.eval()
-
-pil_image = Image.open(image_path).convert("RGB")
-width, height = pil_image.size
-image_np = np.array(pil_image).astype(np.float32) / 255.0
-image_tensor = torch.from_numpy(image_np).permute(2, 0, 1).to("mps")
-
-with torch.no_grad():
-    output = model.infer(image_tensor)
-
-intrinsics = output["intrinsics"].squeeze().cpu().numpy()
-fx_normalized = float(intrinsics[0, 0])
-fx = fx_normalized * width
-camera_angle_x = 2 * math.atan(width / (2 * fx))
-
-print(json.dumps({
-    "camera_angle_x": camera_angle_x,
-    "fx_normalized": fx_normalized,
-    "width": width,
-    "height": height,
-}))
-'''
+# Match upstream Pixal3D inference.py: ViT-L for camera estimation.
+DEFAULT_MOGE_MODEL = "Ruicheng/moge-2-vitl"
 
 
-def estimate_camera_fov(image_path: str) -> dict | None:
-    """Estimate camera FOV from an image using MoGe-2 subprocess.
+def estimate_camera_params(
+    image_path: str | Path,
+    *,
+    model_name: str = DEFAULT_MOGE_MODEL,
+    device: str = "mps",
+    mesh_scale: float = 1.0,
+    extend_pixel: int = 0,
+    image_resolution: int = 512,
+) -> dict:
+    """Estimate camera parameters from an image using MoGe-2.
+
+    Matches upstream Pixal3D's get_camera_params_wild_moge() exactly:
+    load MoGe, infer intrinsics, compute FOV and distance.
+
+    Args:
+        image_path: Path to the input image.
+        model_name: HuggingFace model name for MoGe.
+        device: PyTorch device for MoGe inference.
+        mesh_scale: Mesh scale factor for distance computation.
+        extend_pixel: Pixel extension for distance computation.
+        image_resolution: Target resolution for distance computation.
 
     Returns:
-        dict with 'camera_angle_x', 'fx_normalized', 'width', 'height'.
-        Returns None if MoGe is not available.
+        dict with 'camera_angle_x' (radians), 'distance', 'mesh_scale'.
     """
-    # Write the inline script to a temp file
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
-        f.write(_MOGE_SCRIPT)
-        script_path = f.name
+    import torch
+    from PIL import Image
 
-    try:
-        result = subprocess.run(
-            [sys.executable, script_path, str(image_path)],
-            capture_output=True, text=True, timeout=120,
-        )
+    t0 = time.perf_counter()
 
-        if result.returncode != 0:
-            stderr = result.stderr.strip()
-            if "No module named 'moge'" in stderr:
-                print("  MoGe: not installed (pip install moge), using default FOV", flush=True)
-            else:
-                print(f"  MoGe: failed ({stderr[:200]})", flush=True)
-            return None
+    # Load MoGe model.
+    print(f"  Loading MoGe-2 ({model_name})...", flush=True)
+    from moge.model import import_model_class_by_version
+    moge_model = (
+        import_model_class_by_version("v2")
+        .from_pretrained(model_name)
+        .to(device)
+        .eval()
+    )
+    t_load = time.perf_counter() - t0
+    print(f"  MoGe loaded ({t_load:.1f}s)", flush=True)
 
-        data = json.loads(result.stdout.strip())
-        return data
+    # Load and preprocess image (matching upstream exactly).
+    pil_image = Image.open(image_path).convert("RGB")
+    width, height = pil_image.size
+    image_np = np.array(pil_image).astype(np.float32) / 255.0
+    image_tensor = torch.from_numpy(image_np).permute(2, 0, 1).to(device)
 
-    except subprocess.TimeoutExpired:
-        print("  MoGe: timed out (120s)", flush=True)
-        return None
-    except (json.JSONDecodeError, Exception) as e:
-        print(f"  MoGe: error ({e})", flush=True)
-        return None
-    finally:
-        os.unlink(script_path)
+    # Infer intrinsics.
+    t_infer = time.perf_counter()
+    with torch.no_grad():
+        output = moge_model.infer(image_tensor)
+    intrinsics = output["intrinsics"].squeeze().cpu().numpy()
+
+    # Extract FOV from normalized focal length.
+    fx_normalized = float(intrinsics[0, 0])
+    fx = fx_normalized * width
+    camera_angle_x = 2 * math.atan(width / (2 * fx))
+
+    # Compute distance using the same geometry as upstream.
+    distance = _compute_distance_from_fov(
+        camera_angle_x,
+        mesh_scale=mesh_scale,
+        image_resolution=image_resolution,
+        extend_pixel=extend_pixel,
+    )
+
+    t_total = time.perf_counter() - t0
+    print(
+        f"  MoGe camera: FOV={math.degrees(camera_angle_x):.1f}°, "
+        f"distance={distance:.4f} ({t_total:.1f}s total)",
+        flush=True,
+    )
+
+    # Unload MoGe to free GPU memory before MLX pipeline starts.
+    del moge_model, output, image_tensor
+    import gc
+    gc.collect()
+    if device == "mps":
+        torch.mps.empty_cache()
+
+    return {
+        "camera_angle_x": camera_angle_x,
+        "distance": distance,
+        "mesh_scale": mesh_scale,
+    }
 
 
-def get_camera_params_with_moge(image_path: str, mesh_scale: float = 1.0,
-                                 image_resolution: int = 512, extend_pixel: int = 0) -> dict | None:
-    """Estimate full camera params (FOV + distance) using MoGe-2.
+def _compute_distance_from_fov(
+    camera_angle_x: float,
+    mesh_scale: float = 1.0,
+    image_resolution: int = 512,
+    extend_pixel: int = 0,
+) -> float:
+    """Compute camera distance from FOV.
 
-    Returns:
-        dict with 'camera_angle_x', 'distance', 'mesh_scale'.
-        Returns None if MoGe estimation failed.
+    Pure math, no PyTorch dependency. Matches upstream Pixal3D's
+    distance_from_fov() for the standard grid_point=[-1, 0, 0].
     """
-    moge_result = estimate_camera_fov(image_path)
-    if moge_result is None:
-        return None
-
-    camera_angle_x = moge_result['camera_angle_x']
-
-    # Compute distance from FOV (same math as generate_pixal3d.py)
+    # Rotation matrix (Blender convention)
     rotation = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]])
     grid_point = np.array([-1.0, 0.0, 0.0]) @ rotation.T
     grid_point = grid_point / mesh_scale / 2.0
@@ -120,15 +131,7 @@ def get_camera_params_with_moge(image_path: str, mesh_scale: float = 1.0,
 
     xt = 0 - extend_pixel
     x_ndc = xt - image_resolution / 2.0
+
     xw, yw = grid_point[0], grid_point[1]
-
     distance = f_pixels * xw / x_ndc - yw
-
-    fov_deg = math.degrees(camera_angle_x)
-    print(f"  MoGe camera: FOV={fov_deg:.1f}°, distance={distance:.4f}", flush=True)
-
-    return {
-        'camera_angle_x': camera_angle_x,
-        'distance': distance,
-        'mesh_scale': mesh_scale,
-    }
+    return float(distance)
