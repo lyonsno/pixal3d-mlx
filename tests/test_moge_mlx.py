@@ -13,7 +13,6 @@ class TestMoGeMLXModel:
     def test_model_instantiation(self):
         from trellmlx.models.moge import MoGeModel
         model = MoGeModel()
-        # Verify key components exist
         assert hasattr(model, "encoder")
         assert hasattr(model, "neck")
         assert hasattr(model, "points_head")
@@ -27,41 +26,49 @@ class TestMoGeMLXModel:
         n = load_moge_weights(model, verbose=False)
         assert n >= 480, f"Expected >= 480 weight arrays, got {n}"
 
+        # Spot-check key parameter shapes (F4)
+        pe = model.encoder.backbone.patch_embed.weight
+        assert pe.shape == (1024, 14, 14, 3), f"patch_embed shape: {pe.shape}"
+        cls = model.encoder.backbone.cls_token
+        assert cls.shape == (1, 1, 1024), f"cls_token shape: {cls.shape}"
+        pos = model.encoder.backbone.pos_embed
+        assert pos.shape == (1, 1370, 1024), f"pos_embed shape: {pos.shape}"
+
     def test_forward_runs(self):
-        """Verify forward pass produces correctly shaped outputs."""
+        """Verify forward pass produces correctly shaped, non-trivial outputs."""
         from trellmlx.models.moge import MoGeModel
         from trellmlx.models.moge_loader import load_moge_weights
         model = MoGeModel()
         load_moge_weights(model, verbose=False)
 
-        # Small image for speed
         img = mx.array(np.random.rand(1, 128, 128, 3).astype(np.float32))
         output = model.forward(img, num_tokens=900)
         mx.eval(output["points"], output["mask"], output["metric_scale"])
 
         pts = output["points"]
-        assert pts.shape[0] == 1
-        assert pts.shape[1] == 128  # resized to original
-        assert pts.shape[2] == 128
-        assert pts.shape[3] == 3
+        assert pts.shape == (1, 128, 128, 3)
+
+        # F1: verify output is non-trivial (not all zeros / dead model)
+        pts_np = np.array(pts)
+        assert pts_np.std() > 0.01, f"Points appear trivial: std={pts_np.std()}"
+        assert not np.all(pts_np == 0), "Points are all zeros"
 
         mask = output["mask"]
         assert mask.shape == (1, 128, 128)
 
         scale = output["metric_scale"]
         assert scale.shape == (1,)
-        assert float(scale[0]) > 0  # exp() is always positive
 
-    def test_infer_api(self):
-        """Verify infer() produces expected output keys."""
+    def test_infer_api_nonsquare(self):
+        """Verify infer() handles non-square channels-first input correctly."""
         from trellmlx.models.moge import MoGeModel
         from trellmlx.models.moge_loader import load_moge_weights
         model = MoGeModel()
         load_moge_weights(model, verbose=False)
 
-        # channels-first input (matching upstream API)
-        img = mx.array(np.random.rand(3, 128, 128).astype(np.float32))
-        result = model.infer(img, resolution_level=0)  # lowest for speed
+        # F3: non-square input catches channels-first/last transpose errors
+        img = mx.array(np.random.rand(3, 100, 140).astype(np.float32))
+        result = model.infer(img, resolution_level=0)
         mx.eval(result["intrinsics"])
 
         assert "points" in result
@@ -69,17 +76,23 @@ class TestMoGeMLXModel:
         assert "intrinsics" in result
         assert "mask" in result
 
-        assert result["points"].shape == (128, 128, 3)
-        assert result["depth"].shape == (128, 128)
+        assert result["points"].shape == (100, 140, 3), (
+            f"Expected (100, 140, 3), got {result['points'].shape}"
+        )
+        assert result["depth"].shape == (100, 140)
         assert result["intrinsics"].shape == (3, 3)
-        assert result["mask"].shape == (128, 128)
+        assert result["mask"].shape == (100, 140)
 
 
-class TestMoGeMLXComponents:
-    """Test individual MLX MoGe components against PyTorch reference."""
+class TestMoGeMLXComponentSmoke:
+    """Smoke tests for individual MLX MoGe components.
 
-    def test_conv_transpose_resampler_parity(self):
-        """ConvTranspose2d resampler should match PyTorch exactly."""
+    These verify that loaded components produce correct shapes and non-trivial
+    output. They are NOT cross-backend parity tests against PyTorch — parity
+    was verified interactively during development (see topos for evidence).
+    """
+
+    def test_conv_transpose_resampler(self):
         from trellmlx.models.moge import MoGeModel
         from trellmlx.models.moge_loader import load_moge_weights
         model = MoGeModel()
@@ -92,13 +105,10 @@ class TestMoGeMLXComponents:
         mx.eval(y)
         y_np = np.array(y)
 
-        # Basic shape check
         assert y_np.shape == (1, 16, 16, 256)
-        # Should have non-trivial output
         assert y_np.std() > 0.01
 
-    def test_residual_block_parity(self):
-        """ResidualConvBlock should produce non-trivial output."""
+    def test_residual_block(self):
         from trellmlx.models.moge import MoGeModel
         from trellmlx.models.moge_loader import load_moge_weights
         model = MoGeModel()
@@ -114,7 +124,6 @@ class TestMoGeMLXComponents:
 
         assert y_np.shape == (1, 16, 16, 256)
         assert y_np.std() > 0.01
-        # Residual: output should differ from input
         assert not np.allclose(x_np, y_np, atol=0.01)
 
     def test_bilinear_resize(self):
@@ -129,3 +138,9 @@ class TestMoGeMLXComponents:
         z = _bilinear_resize(x, 8, 8)
         mx.eval(z)
         np.testing.assert_allclose(np.array(x), np.array(z), atol=1e-6)
+
+    def test_missing_weights_error(self):
+        """Verify helpful error when weights are not found."""
+        from trellmlx.models.moge_loader import _find_hf_weights
+        with pytest.raises(FileNotFoundError, match="huggingface-cli download"):
+            _find_hf_weights("nonexistent/model-xyz")

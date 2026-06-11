@@ -171,6 +171,12 @@ def estimate_camera_params_mlx(
         flush=True,
     )
 
+    # Unload MLX MoGe model to free unified memory before pipeline starts
+    del model, result, img_chw
+    import gc
+    gc.collect()
+    mx.metal.clear_cache()
+
     return {
         "camera_angle_x": camera_angle_x,
         "distance": distance,

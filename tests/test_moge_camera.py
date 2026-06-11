@@ -18,22 +18,18 @@ def _moge_available() -> bool:
 class TestComputeDistanceFromFov:
     """Test the pure-math distance computation (no PyTorch needed)."""
 
-    def test_default_fov_matches_existing(self):
-        """The distance for the default 49.1° FOV should match
-        get_default_camera_params() in generate_pixal3d.py."""
+    def test_default_fov_matches_expected(self):
+        """Distance for default 49.1° FOV matches precomputed reference value."""
         from trellmlx.moge_camera import _compute_distance_from_fov
 
         default_fov = 0.8575560450553894  # ~49.1 degrees
         distance = _compute_distance_from_fov(default_fov)
 
-        # Cross-check against the existing function
-        import sys
-        sys.path.insert(0, ".")
-        from generate_pixal3d import compute_distance_from_fov as gen_distance
-        expected = gen_distance(default_fov)
-
-        assert abs(distance - expected) < 1e-10, (
-            f"Distance mismatch: {distance} vs {expected}"
+        # Precomputed from upstream Pixal3D distance_from_fov() with
+        # grid_point=[-1,0,0], mesh_scale=1.0, image_resolution=512
+        expected = 1.0937500142266299
+        assert abs(distance - expected) < 1e-8, (
+            f"Distance {distance} != expected {expected}"
         )
 
     def test_wider_fov_gives_shorter_distance(self):
