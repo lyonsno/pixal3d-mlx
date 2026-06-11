@@ -579,8 +579,8 @@ class MoGeModel(nn.Module):
         # Scale head: CLS token -> metric scale
         self.scale_head = ScaleHead(D, D, 1)
 
-        # Remap output config
-        self.remap_output = "linear"
+        # Remap output config — MoGe-2-vitl checkpoint uses "exp"
+        self.remap_output = "exp"
 
     def _normalized_uv(self, h: int, w: int, aspect_ratio: float) -> mx.array:
         """Generate normalized UV coordinates matching upstream normalized_view_plane_uv().
@@ -658,8 +658,22 @@ class MoGeModel(nn.Module):
         points_out = _bilinear_resize(points_out, img_h, img_w)
         mask_out = _bilinear_resize(mask_out, img_h, img_w)
 
-        # Post-process
-        # points: remap (linear = identity) -> [B, H, W, 3]
+        # Remap output — MoGe-2-vitl uses 'exp' mode:
+        #   xy' = xy * exp(z),  z' = exp(z)
+        # This makes z always positive (the network outputs log-depth)
+        # and scales xy by depth (the network outputs normalized lateral coords).
+        if self.remap_output == "exp":
+            xy = points_out[..., :2]
+            z = mx.exp(points_out[..., 2:3])
+            points_out = mx.concatenate([xy * z, z], axis=-1)
+        elif self.remap_output == "sinh":
+            points_out = mx.sinh(points_out)
+        elif self.remap_output == "sinh_exp":
+            xy = mx.sinh(points_out[..., :2])
+            z = mx.exp(points_out[..., 2:3])
+            points_out = mx.concatenate([xy, z], axis=-1)
+        # 'linear' is identity (no-op)
+
         mask = mx.sigmoid(mask_out[..., 0])  # [B, H, W]
         metric_scale = mx.exp(metric_scale[:, 0])  # [B]
 
