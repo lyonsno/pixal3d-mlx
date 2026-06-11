@@ -774,36 +774,29 @@ class MoGeModel(nn.Module):
 # ============================================================================
 
 def _pil_resize(x: mx.array, target_h: int, target_w: int) -> mx.array:
-    """Resize using PIL LANCZOS for high-quality antialiased interpolation.
+    """Resize using align_corners=False bilinear.
 
-    Matches PyTorch's F.interpolate(antialias=True) more closely than
-    raw bilinear sampling. Operates per-batch-element via numpy/PIL.
+    For the encoder input resize, we now use _bilinear_resize which
+    implements align_corners=False matching upstream F.interpolate.
+    This wrapper exists for API compatibility.
     """
-    from PIL import Image as PILImage
-
-    x_np = np.array(x)
-    B = x_np.shape[0]
-    results = []
-    for i in range(B):
-        img = x_np[i]  # [H, W, C]
-        # PIL expects uint8 or handles float arrays via fromarray
-        # Use float32 → clip → convert for precision
-        pil_img = PILImage.fromarray((np.clip(img, 0, 1) * 255).astype(np.uint8))
-        resized = pil_img.resize((target_w, target_h), PILImage.LANCZOS)
-        results.append(np.array(resized).astype(np.float32) / 255.0)
-    return mx.array(np.stack(results))
+    return _bilinear_resize(x, target_h, target_w)
 
 
 def _bilinear_resize(x: mx.array, target_h: int, target_w: int) -> mx.array:
-    """Bilinear resize for [B, H, W, C] tensor."""
+    """Bilinear resize for [B, H, W, C] tensor (align_corners=False).
+
+    Matches PyTorch's F.interpolate(align_corners=False) pixel coordinate
+    convention: output pixel i maps to input coordinate (i + 0.5) * H/target_h - 0.5.
+    """
     if x.shape[1] == target_h and x.shape[2] == target_w:
         return x
 
     B, H, W, C = x.shape
 
-    # Create sampling grid
-    y_coords = mx.linspace(0, H - 1, target_h)
-    x_coords = mx.linspace(0, W - 1, target_w)
+    # align_corners=False: (i + 0.5) * src_size / dst_size - 0.5
+    y_coords = (mx.arange(target_h).astype(mx.float32) + 0.5) * H / target_h - 0.5
+    x_coords = (mx.arange(target_w).astype(mx.float32) + 0.5) * W / target_w - 0.5
     grid_y, grid_x = mx.meshgrid(y_coords, x_coords, indexing="ij")
 
     # Bilinear interpolation
@@ -875,27 +868,26 @@ def _recover_focal_shift_np(
     if len(pts) < 2:
         return 1.0, 0.0
 
-    # Solve for focal and shift:
-    # For each point (u, v, x, y, z):
-    #   u = focal * x / (z + shift)
-    #   v = focal * y / (z + shift)
-    # Rearranging: u*(z+shift) = focal*x, v*(z+shift) = focal*y
-    # u*z + u*shift = focal*x
-    # v*z + v*shift = focal*y
-    # [x, -u] [focal]   [u*z]
-    # [y, -v] [shift] = [v*z]
-    x_pts, y_pts, z_pts = pts[:, 0], pts[:, 1], pts[:, 2]
-    u_pts, v_pts = uv_m[:, 0], uv_m[:, 1]
+    # Nonlinear focal/shift recovery matching upstream exactly.
+    # Solves: min |focal * xy / (z + shift) - uv| via Levenberg-Marquardt.
+    from functools import partial
+    from scipy.optimize import least_squares
 
-    A = np.stack([
-        np.concatenate([x_pts, y_pts]),
-        np.concatenate([-u_pts, -v_pts]),
-    ], axis=-1)
-    b = np.concatenate([u_pts * z_pts, v_pts * z_pts])
+    xy = pts[:, :2]
+    z = pts[:, 2]
+
+    def _residual(uv, xy, z, shift):
+        xy_proj = xy / (z + shift)[:, None]
+        f = (xy_proj * uv).sum() / np.square(xy_proj).sum()
+        return (f * xy_proj - uv).ravel()
 
     try:
-        result = np.linalg.lstsq(A, b, rcond=None)
-        focal, shift = float(result[0][0]), float(result[0][1])
+        solution = least_squares(
+            partial(_residual, uv_m, xy, z), x0=0, ftol=1e-3, method="lm",
+        )
+        shift = float(solution["x"].squeeze())
+        xy_proj = xy / (z + shift)[:, None]
+        focal = float((xy_proj * uv_m).sum() / np.square(xy_proj).sum())
     except Exception:
         focal, shift = 1.0, 0.0
 
