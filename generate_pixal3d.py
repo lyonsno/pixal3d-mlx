@@ -230,7 +230,9 @@ def main():
     parser.add_argument("--output", default="/tmp/pixal3d-mlx-mesh.glb")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--fov", type=float, default=-1.0,
-                        help="Manual FOV in radians (default: auto ~49 degrees)")
+                        help="Manual FOV in radians (default: auto via MoGe, fallback ~49 deg)")
+    parser.add_argument("--no-moge", action="store_true",
+                        help="Skip MoGe camera estimation, use default FOV")
     parser.add_argument("--resolution", type=int, default=1024)
     parser.add_argument("--max-tokens", type=int, default=49152)
     parser.add_argument("--target-faces", type=int, default=200_000)
@@ -273,10 +275,17 @@ def main():
     t_total = time.perf_counter()
     mx.metal.reset_peak_memory()
 
-    # Camera parameters
+    # Camera parameters: manual FOV > MoGe auto > default
     if args.fov > 0:
         camera_params = get_default_camera_params(fov_rad=args.fov)
         print(f"Manual FOV: {math.degrees(args.fov):.1f} deg, distance: {camera_params['distance']:.4f}")
+    elif not args.no_moge:
+        from trellmlx.moge_camera import get_camera_params_with_moge
+        print("=== Camera Estimation (MoGe-2) ===", flush=True)
+        camera_params = get_camera_params_with_moge(args.image)
+        if camera_params is None:
+            camera_params = get_default_camera_params()
+            print(f"  Fallback to default FOV: {math.degrees(camera_params['camera_angle_x']):.1f} deg")
     else:
         camera_params = get_default_camera_params()
         print(f"Default FOV: {math.degrees(camera_params['camera_angle_x']):.1f} deg, "
