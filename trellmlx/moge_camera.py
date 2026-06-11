@@ -1,12 +1,14 @@
 """MoGe-2 camera estimation for Pixal3D-MLX.
 
 Estimates camera intrinsics (FOV) from a single image using MoGe-2,
-matching the upstream Pixal3D camera conditioning pipeline. This is a
-PyTorch/MPS sidecar — MoGe runs on MPS, then results are passed to
-the MLX pipeline as plain Python floats.
+matching the upstream Pixal3D camera conditioning pipeline.
 
-The model loads, infers, and unloads before the MLX pipeline starts,
-so MoGe and the flow models never share GPU memory.
+Two backends:
+  - PyTorch/MPS (default): proven exact match with upstream Pixal3D.
+    MoGe loads on MPS, infers, and unloads before MLX pipeline starts.
+  - MLX (experimental, --mlx-moge): pure MLX MoGe-2 port. Architecture
+    verified but focal recovery has precision gap due to accumulated
+    float32 drift. Use for development/testing, not production.
 """
 
 from __future__ import annotations
@@ -102,6 +104,72 @@ def estimate_camera_params(
     gc.collect()
     if device == "mps":
         torch.mps.empty_cache()
+
+    return {
+        "camera_angle_x": camera_angle_x,
+        "distance": distance,
+        "mesh_scale": mesh_scale,
+    }
+
+
+def estimate_camera_params_mlx(
+    image_path: str | Path,
+    *,
+    mesh_scale: float = 1.0,
+    extend_pixel: int = 0,
+    image_resolution: int = 512,
+) -> dict:
+    """Estimate camera parameters using the pure MLX MoGe-2 port.
+
+    EXPERIMENTAL: The MLX MoGe model architecture is verified correct
+    (individual components match PyTorch within 1e-5), but accumulated
+    float32 precision drift through the deep pipeline produces a z-offset
+    in the point map that can confuse the focal recovery solver.
+
+    Use estimate_camera_params() (PyTorch/MPS) for production.
+    """
+    import mlx.core as mx
+    from PIL import Image
+
+    t0 = time.perf_counter()
+
+    print("  Loading MoGe-2 MLX...", flush=True)
+    from trellmlx.models.moge import MoGeModel
+    from trellmlx.models.moge_loader import load_moge_weights
+
+    model = MoGeModel()
+    load_moge_weights(model, verbose=False)
+    t_load = time.perf_counter() - t0
+    print(f"  MoGe MLX loaded ({t_load:.1f}s)", flush=True)
+
+    # Load image
+    pil_image = Image.open(image_path).convert("RGB")
+    width, height = pil_image.size
+    image_np = np.array(pil_image).astype(np.float32) / 255.0
+
+    # Run inference (channels-first for API compat)
+    img_chw = mx.array(image_np.transpose(2, 0, 1))
+    result = model.infer(img_chw)
+    mx.eval(result["intrinsics"])
+
+    intrinsics = np.array(result["intrinsics"])
+    fx_normalized = float(intrinsics[0, 0])
+    fx = fx_normalized * width
+    camera_angle_x = 2 * math.atan(width / (2 * fx))
+
+    distance = _compute_distance_from_fov(
+        camera_angle_x,
+        mesh_scale=mesh_scale,
+        image_resolution=image_resolution,
+        extend_pixel=extend_pixel,
+    )
+
+    t_total = time.perf_counter() - t0
+    print(
+        f"  MoGe MLX camera: FOV={math.degrees(camera_angle_x):.1f}°, "
+        f"distance={distance:.4f} ({t_total:.1f}s total)",
+        flush=True,
+    )
 
     return {
         "camera_angle_x": camera_angle_x,

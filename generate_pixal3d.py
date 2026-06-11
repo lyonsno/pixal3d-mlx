@@ -234,7 +234,7 @@ def main():
     parser.add_argument("--no-moge", action="store_true",
                         help="Skip MoGe camera estimation, use fixed default FOV (~49 deg)")
     parser.add_argument("--mlx-moge", action="store_true",
-                        help="Use pure MLX MoGe (no PyTorch dependency)")
+                        help="Use experimental pure MLX MoGe (no PyTorch dependency)")
     parser.add_argument("--resolution", type=int, default=1024)
     parser.add_argument("--max-tokens", type=int, default=49152)
     parser.add_argument("--target-faces", type=int, default=200_000)
@@ -290,7 +290,7 @@ def main():
             else:
                 from trellmlx.moge_camera import estimate_camera_params
                 camera_params = estimate_camera_params(args.image)
-        except (ImportError, FileNotFoundError, RuntimeError) as e:
+        except (ImportError, Exception) as e:
             print(f"  MoGe unavailable ({e}), falling back to default FOV.", flush=True)
             camera_params = get_default_camera_params()
             print(f"Default FOV: {math.degrees(camera_params['camera_angle_x']):.1f} deg, "
