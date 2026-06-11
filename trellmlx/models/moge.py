@@ -210,11 +210,6 @@ class DINOv2Backbone(nn.Module):
         """
         B = pixel_values.shape[0]
 
-        target_h = token_h * self.patch_size
-        target_w = token_w * self.patch_size
-        if pixel_values.shape[1] != target_h or pixel_values.shape[2] != target_w:
-            pixel_values = _bilinear_resize(pixel_values, target_h, target_w)
-
         x = self.patch_embed(pixel_values)
         h_patches, w_patches = x.shape[1], x.shape[2]
         x = x.reshape(B, -1, self.embed_dim)
@@ -229,12 +224,13 @@ class DINOv2Backbone(nn.Module):
         for i, block in enumerate(self.blocks):
             x = block(x)
             if i in layer_set:
-                # Return patch tokens as spatial: [B, N, D] -> [B, D, H, W]
-                patch = x[:, 1:]
+                # DINOv2 applies norm to each intermediate layer output
+                normed = self.norm(x)
+                patch = normed[:, 1:]
                 spatial = patch.reshape(B, h_patches, w_patches, self.embed_dim)
-                # Convert to channels-first for conv operations: [B, H, W, D] -> [B, D, H, W]
                 intermediates.append(spatial.transpose(0, 3, 1, 2))
 
+        # CLS from final normed output
         x = self.norm(x)
         cls_out = x[:, 0]
 
@@ -284,10 +280,20 @@ class DINOv2Encoder(nn.Module):
             features: [B, D, token_h, token_w] summed multi-scale features
             cls_token: [B, D]
         """
+        # Resize image to match token grid before normalization.
+        # Use PIL LANCZOS for the initial resize — it closely matches
+        # PyTorch's F.interpolate(antialias=True) which the model was trained
+        # with. MLX's bilinear lacks antialiasing and produces measurably
+        # different results that compound through the 24 transformer blocks.
+        target_h = token_h * self.backbone.patch_size
+        target_w = token_w * self.backbone.patch_size
+        if image.shape[1] != target_h or image.shape[2] != target_w:
+            image = _pil_resize(image, target_h, target_w)
+
         # Normalize
         image = (image - self.image_mean) / self.image_std
 
-        # Get intermediate features
+        # Get intermediate features — pass pre-resized image
         intermediates, cls_token = self.backbone.get_intermediate_layers(
             image, token_h, token_w, self.intermediate_layers,
         )
@@ -749,6 +755,27 @@ class MoGeModel(nn.Module):
 # ============================================================================
 # Utility functions
 # ============================================================================
+
+def _pil_resize(x: mx.array, target_h: int, target_w: int) -> mx.array:
+    """Resize using PIL LANCZOS for high-quality antialiased interpolation.
+
+    Matches PyTorch's F.interpolate(antialias=True) more closely than
+    raw bilinear sampling. Operates per-batch-element via numpy/PIL.
+    """
+    from PIL import Image as PILImage
+
+    x_np = np.array(x)
+    B = x_np.shape[0]
+    results = []
+    for i in range(B):
+        img = x_np[i]  # [H, W, C]
+        # PIL expects uint8 or handles float arrays via fromarray
+        # Use float32 → clip → convert for precision
+        pil_img = PILImage.fromarray((np.clip(img, 0, 1) * 255).astype(np.uint8))
+        resized = pil_img.resize((target_w, target_h), PILImage.LANCZOS)
+        results.append(np.array(resized).astype(np.float32) / 255.0)
+    return mx.array(np.stack(results))
+
 
 def _bilinear_resize(x: mx.array, target_h: int, target_w: int) -> mx.array:
     """Bilinear resize for [B, H, W, C] tensor."""
