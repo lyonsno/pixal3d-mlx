@@ -2,7 +2,7 @@
 
 MLX-native [Pixal3D](https://github.com/TencentARC/Pixal3D) (SIGGRAPH 2026) inference for Apple Silicon.
 
-Image → textured 3D mesh with PBR materials. No NVIDIA GPU required. Generation pipeline is pure MLX on Metal; optional camera estimation uses PyTorch/MPS via subprocess.
+Image → textured 3D mesh with PBR materials. No NVIDIA GPU required. Entire pipeline is pure MLX on Metal — including camera estimation via a native MoGe-2 port ([details](docs/moge-camera-estimation.md)).
 
 [Pixal3D](https://github.com/TencentARC/Pixal3D) uses pixel-aligned back-projection conditioning to establish direct pixel-to-3D correspondence, producing dramatically better geometry and texture fidelity than attention-based conditioning alone. This port runs the full pipeline natively on Apple Silicon via [MLX](https://github.com/ml-explore/mlx), including a pure-MLX port of [NAF](https://github.com/valeoai/NAF) (Neural Attention Fields) for feature upsampling.
 
@@ -104,7 +104,7 @@ INT4 quantization (`--quantize 4`) reduces flow model weights 3.5x with comparab
 - **No SDPA cliff** — MLX Flash Attention handles 26K+ tokens where PyTorch MPS silently breaks at 18K
 - **Checkpoint/resume** — save intermediate results, resume from shape latent to skip geometry stages
 - **Aggressive memory cleanup** — `mx.metal.clear_cache()` between stages, model offloading
-- **MoGe-2 camera estimation** — automatic FOV estimation from input image via subprocess (no torch in main process)
+- **MoGe-2 camera estimation** — pure MLX port of [MoGe-2](https://github.com/microsoft/MoGe) (326M params) for automatic per-image FOV estimation. No PyTorch dependency. Matches PyTorch output within 0.08° FOV / 0.9999973 correlation ([details](docs/moge-camera-estimation.md))
 - **INT4 quantization** — `--quantize 4` reduces flow model weights 3.5x (2.7 GB → 755 MB per model)
 - **47 tests** — projection modules, flow models, weight loading, NAF (neighborhood attention, RoPE, encoder, cross-attention, weight loader)
 
@@ -141,7 +141,8 @@ trellmlx/
 
 | | Upstream (CUDA) | This port (MLX) |
 |---|---|---|
-| Runtime | PyTorch + CUDA + natten + nvdiffrast + o_voxel | Pure MLX + numpy |
+| Runtime | PyTorch + CUDA + natten + nvdiffrast + o_voxel | Pure MLX + numpy (no PyTorch) |
+| Camera estimation | MoGe-2 via PyTorch CUDA | MoGe-2 ported to MLX (326M params) |
 | Attention | Flash Attention 3 (CUDA) | MLX Flash Attention (Metal) |
 | NAF | natten CUDA kernels | Windowed gather with dilation (pure MLX) |
 | Sparse conv | flex_gemm CUDA | Gather-scatter sparse conv (MLX) |
