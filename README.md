@@ -44,9 +44,10 @@ huggingface-cli login
 huggingface-cli download TencentARC/Pixal3D
 huggingface-cli download facebook/dinov3-vitl16-pretrain-lvd1689m
 
-# Download NAF weights (~3 MB):
+# Download and convert NAF weights (~3 MB, needs torch for one-time conversion):
 mkdir -p weights
 curl -L https://github.com/valeoai/NAF/releases/download/model/naf_release.pth -o weights/naf_release.pth
+pip install torch safetensors  # only needed for this conversion
 python -c "import torch; from safetensors.torch import save_file; save_file(torch.load('weights/naf_release.pth', map_location='cpu', weights_only=True), 'weights/naf_release.safetensors')"
 
 # Generate:
@@ -88,11 +89,13 @@ PYTHONPATH=. python resume_pixal3d.py --image photo.png --ckpt outputs/ckpt_dir 
 
 | Resolution | Tokens | Time | Peak GPU | Texture |
 |-----------|--------|------|----------|---------|
-| 512 | ~6K | ~10 min | ~20 GB | 2048 |
-| 1024 | ~15K | ~21 min | ~33 GB | 4096 |
+| 512 (FP16) | ~6K | ~10 min | ~12 GB | 2048 |
+| 512 (INT4) | ~6K | ~12 min | ~12 GB | 2048 |
+| 1024 (FP16) | ~15-26K | ~21 min | ~33 GB | 4096 |
 
-Requires Apple Silicon with 64 GB unified memory for resolution 1024.
-Resolution 512 may fit in 32 GB.
+Resolution 512 fits comfortably in 16 GB unified memory.
+Resolution 1024 requires 64 GB unified memory.
+INT4 quantization (`--quantize 4`) reduces flow model weights 3.5x with comparable quality.
 
 ### Key features
 
@@ -101,6 +104,8 @@ Resolution 512 may fit in 32 GB.
 - **No SDPA cliff** — MLX Flash Attention handles 26K+ tokens where PyTorch MPS silently breaks at 18K
 - **Checkpoint/resume** — save intermediate results, resume from shape latent to skip geometry stages
 - **Aggressive memory cleanup** — `mx.metal.clear_cache()` between stages, model offloading
+- **MoGe-2 camera estimation** — automatic FOV estimation from input image via subprocess (no torch in main process)
+- **INT4 quantization** — `--quantize 4` reduces flow model weights 3.5x (2.7 GB → 755 MB per model)
 - **47 tests** — projection modules, flow models, weight loading, NAF (neighborhood attention, RoPE, encoder, cross-attention, weight loader)
 
 ## Architecture
