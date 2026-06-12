@@ -1,7 +1,7 @@
 [project]
-name = "trellis2mlx"
+name = "pixal3d-mlx"
 version = "0.1.0"
-description = "MLX-native TRELLIS.2 inference for Apple Silicon"
+description = "MLX-native Pixal3D (SIGGRAPH 2026) image-to-3D inference for Apple Silicon"
 requires-python = ">=3.11"
 dependencies = [
     "mlx>=0.30",
@@ -21,8 +21,12 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest"]
-image = ["torch", "torchvision", "transformers"]
+# MoGe camera estimation runs via subprocess; install moge separately if needed:
+#   pip install moge @ git+https://github.com/microsoft/MoGe.git
+# NAF weight conversion (one-time): pip install torch safetensors
 
+# Note: trellmlx package name is retained for import compatibility —
+# the implementation reuses the trellis2mlx module structure intentionally.
 [tool.setuptools.packages.find]
 include = ["trellmlx*"]
 

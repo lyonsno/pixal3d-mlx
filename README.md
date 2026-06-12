@@ -2,7 +2,7 @@
 
 MLX-native [Pixal3D](https://github.com/TencentARC/Pixal3D) (SIGGRAPH 2026) inference for Apple Silicon.
 
-Image → textured 3D mesh with PBR materials. No NVIDIA GPU, no PyTorch — pure MLX on Metal.
+Image → textured 3D mesh with PBR materials. No NVIDIA GPU required. Generation pipeline is pure MLX on Metal; optional camera estimation uses PyTorch/MPS via subprocess.
 
 [Pixal3D](https://github.com/TencentARC/Pixal3D) uses pixel-aligned back-projection conditioning to establish direct pixel-to-3D correspondence, producing dramatically better geometry and texture fidelity than attention-based conditioning alone. This port runs the full pipeline natively on Apple Silicon via [MLX](https://github.com/ml-explore/mlx), including a pure-MLX port of [NAF](https://github.com/valeoai/NAF) (Neural Attention Fields) for feature upsampling.
 
@@ -25,7 +25,7 @@ Image → textured 3D mesh with PBR materials. No NVIDIA GPU, no PyTorch — pur
 </tr>
 </table>
 
-*Single image → textured 3D mesh with PBR materials. ~10-21 min on M4 Max depending on resolution. 4096 texture, up to 500K faces. No NVIDIA GPU, no PyTorch — pure MLX on Apple Silicon.*
+*Single image → textured 3D mesh with PBR materials. ~10 min at 512 resolution on M4 Max. Fits in 16 GB unified memory. Higher resolutions need 64 GB.*
 
 ## Quick start
 
