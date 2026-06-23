@@ -144,3 +144,87 @@ class TestMoGeMLXComponentSmoke:
         from trellmlx.models.moge_loader import _find_hf_weights
         with pytest.raises(FileNotFoundError, match="huggingface-cli download"):
             _find_hf_weights("nonexistent/model-xyz")
+
+
+class TestMoGeNormalHead:
+    """Tests for the normal estimation head (moge-2-vitl-normal variant)."""
+
+    def test_model_has_no_normal_head_by_default(self):
+        """Base model should not have a normal_head attribute."""
+        from trellmlx.models.moge import MoGeModel
+        model = MoGeModel()
+        assert not hasattr(model, "normal_head") or model.normal_head is None
+
+    def test_model_with_normal_head(self):
+        """Model instantiated with normal_head=True should have the head."""
+        from trellmlx.models.moge import MoGeModel
+        model = MoGeModel(normal_head=True)
+        assert model.normal_head is not None
+
+    def test_normal_head_weight_loading(self):
+        """Load weights from moge-2-vitl-normal checkpoint; normal_head must be populated."""
+        from trellmlx.models.moge import MoGeModel
+        from trellmlx.models.moge_loader import load_moge_weights
+        model = MoGeModel(normal_head=True)
+        n = load_moge_weights(model, weights_path=None,
+                              model_name="Ruicheng/moge-2-vitl-normal",
+                              verbose=False)
+        # Base model has ~480 arrays; normal head adds 38 more
+        assert n >= 510, f"Expected >= 510 weight arrays with normal head, got {n}"
+
+        # Spot-check: output_blocks.4 should have shape [3, 1, 1, 32] (MLX conv format)
+        ob4 = model.normal_head.output_blocks[4]
+        assert ob4 is not None
+        assert ob4.weight.shape == (3, 1, 1, 32), f"Got shape {ob4.weight.shape}"
+
+    def test_forward_produces_normals(self):
+        """Forward pass with normal_head should include 'normal' in output."""
+        from trellmlx.models.moge import MoGeModel
+        from trellmlx.models.moge_loader import load_moge_weights
+        model = MoGeModel(normal_head=True)
+        load_moge_weights(model, model_name="Ruicheng/moge-2-vitl-normal",
+                          verbose=False)
+
+        img = mx.array(np.random.rand(1, 128, 128, 3).astype(np.float32))
+        output = model.forward(img, num_tokens=900)
+        mx.eval(output["points"], output["normal"], output["mask"])
+
+        assert "normal" in output, "forward() must return 'normal' when normal_head is present"
+        normals = output["normal"]
+        assert normals.shape == (1, 128, 128, 3), f"Expected (1,128,128,3), got {normals.shape}"
+
+        # Normals should be L2-normalized (unit vectors)
+        normals_np = np.array(normals)
+        norms = np.linalg.norm(normals_np, axis=-1)
+        np.testing.assert_allclose(norms, 1.0, atol=0.01,
+                                   err_msg="Normals should be approximately unit vectors")
+
+    def test_forward_without_normal_head_still_works(self):
+        """Base model (no normal_head) should still work, returning no 'normal' key."""
+        from trellmlx.models.moge import MoGeModel
+        from trellmlx.models.moge_loader import load_moge_weights
+        model = MoGeModel()
+        load_moge_weights(model, verbose=False)
+
+        img = mx.array(np.random.rand(1, 128, 128, 3).astype(np.float32))
+        output = model.forward(img, num_tokens=900)
+        mx.eval(output["points"], output["mask"])
+
+        assert "normal" not in output, "Base model should not produce normals"
+        assert output["points"].shape == (1, 128, 128, 3)
+
+    def test_infer_returns_normals(self):
+        """infer() with normal_head should include normals in result."""
+        from trellmlx.models.moge import MoGeModel
+        from trellmlx.models.moge_loader import load_moge_weights
+        model = MoGeModel(normal_head=True)
+        load_moge_weights(model, model_name="Ruicheng/moge-2-vitl-normal",
+                          verbose=False)
+
+        img = mx.array(np.random.rand(3, 100, 140).astype(np.float32))
+        result = model.infer(img, resolution_level=0)
+        mx.eval(result["points"])
+
+        assert "normal" in result, "infer() must return 'normal' when normal_head is present"
+        assert result["normal"].shape == (100, 140, 3), \
+            f"Expected (100,140,3), got {result['normal'].shape}"

@@ -24,20 +24,25 @@ def _transpose_conv_transpose_weight(w: np.ndarray) -> np.ndarray:
     return np.transpose(w, (1, 2, 3, 0))
 
 
-def load_moge_weights(model, weights_path: str = None, verbose: bool = True) -> int:
+def load_moge_weights(model, weights_path: str = None, model_name: str = None,
+                      verbose: bool = True) -> int:
     """Load MoGe-2 weights from HuggingFace safetensors into MLX model.
 
     Args:
         model: MoGeModel instance
         weights_path: Path to safetensors file(s) or HF cache directory.
                       If None, auto-detects from HuggingFace cache.
+        model_name: HuggingFace model name (default: "Ruicheng/moge-2-vitl").
+                    Use "Ruicheng/moge-2-vitl-normal" for the normal head variant.
         verbose: Print loading progress
 
     Returns:
         Number of weight arrays loaded
     """
+    if model_name is None:
+        model_name = "Ruicheng/moge-2-vitl"
     if weights_path is None:
-        weights_path = _find_hf_weights("Ruicheng/moge-2-vitl")
+        weights_path = _find_hf_weights(model_name)
 
     # Load weights — supports both .pt (PyTorch checkpoint) and .safetensors
     pt_weights = _load_pt_weights(weights_path)
@@ -85,6 +90,13 @@ def load_moge_weights(model, weights_path: str = None, verbose: bool = True) -> 
                    num_levels=5, num_resamplers=4,
                    num_res_blocks=[0, 1, 1, 1, 0],
                    output_levels=[4])
+
+    # === Normal head (optional, present in moge-2-vitl-normal) ===
+    if model.normal_head is not None:
+        _map_convstack(pt_weights, mlx_weights, "normal_head", "normal_head",
+                       num_levels=5, num_resamplers=4,
+                       num_res_blocks=[0, 1, 1, 1, 0],
+                       output_levels=[4])
 
     # === Scale head ===
     # PyTorch: scale_head.0/2/4 (Linear layers at indices 0, 2, 4 in Sequential)

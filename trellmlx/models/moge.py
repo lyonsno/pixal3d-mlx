@@ -537,10 +537,11 @@ class MoGeModel(nn.Module):
     - ConvStack neck (shared features)
     - Points head (3-ch point map)
     - Mask head (1-ch mask)
+    - Normal head (3-ch normal map, optional — present in moge-2-vitl-normal)
     - Scale head (metric scale from CLS)
     """
 
-    def __init__(self):
+    def __init__(self, normal_head: bool = False):
         super().__init__()
         D = 1024  # DINOv2-L embed dim
 
@@ -575,6 +576,18 @@ class MoGeModel(nn.Module):
             resampler_types=["conv_transpose", "conv_transpose", "conv_transpose", "bilinear"],
             num_res_blocks=[0, 1, 1, 1, 0],
         )
+
+        # Normal head (optional): same architecture as points_head, output dim 3
+        if normal_head:
+            self.normal_head = ConvStack(
+                dims_in=[neck_dims[0], neck_dims[1], neck_dims[2], neck_dims[3], neck_dims[4]],
+                dims_res=head_dims,
+                dims_out=[None, None, None, None, 3],
+                resampler_types=["conv_transpose", "conv_transpose", "conv_transpose", "bilinear"],
+                num_res_blocks=[0, 1, 1, 1, 0],
+            )
+        else:
+            self.normal_head = None
 
         # Scale head: CLS token -> metric scale
         self.scale_head = ScaleHead(D, D, 1)
@@ -652,11 +665,14 @@ class MoGeModel(nn.Module):
         # Heads
         points_out = self.points_head(neck_features)[-1]  # last level
         mask_out = self.mask_head(neck_features)[-1]
+        normal_out = self.normal_head(neck_features)[-1] if self.normal_head is not None else None
         metric_scale = self.scale_head(cls_token)
 
         # Resize to original resolution
         points_out = _bilinear_resize(points_out, img_h, img_w)
         mask_out = _bilinear_resize(mask_out, img_h, img_w)
+        if normal_out is not None:
+            normal_out = _bilinear_resize(normal_out, img_h, img_w)
 
         # Remap output — MoGe-2-vitl uses 'exp' mode:
         #   xy' = xy * exp(z),  z' = exp(z)
@@ -677,11 +693,16 @@ class MoGeModel(nn.Module):
         mask = mx.sigmoid(mask_out[..., 0])  # [B, H, W]
         metric_scale = mx.exp(metric_scale[:, 0])  # [B]
 
-        return {
+        result = {
             "points": points_out,
             "mask": mask,
             "metric_scale": metric_scale,
         }
+        if normal_out is not None:
+            # L2-normalize normals to unit vectors
+            normal_norm = mx.sqrt(mx.sum(normal_out ** 2, axis=-1, keepdims=True) + 1e-8)
+            result["normal"] = normal_out / normal_norm
+        return result
 
     def infer(
         self,
@@ -766,6 +787,11 @@ class MoGeModel(nn.Module):
             "intrinsics": intrinsics,
             "mask": mask_binary[0],
         }
+        if "normal" in output:
+            normal = output["normal"]
+            if apply_mask:
+                normal = mx.where(mask_binary[..., None], normal, mx.zeros_like(normal))
+            result["normal"] = normal[0]
         return result
 
 
