@@ -1,0 +1,22 @@
+Metadata-Version: 2.4
+Name: pixal3d-mlx
+Version: 0.1.0
+Summary: MLX-native Pixal3D (SIGGRAPH 2026) image-to-3D inference for Apple Silicon
+Requires-Python: >=3.11
+License-File: LICENSE
+Requires-Dist: mlx>=0.30
+Requires-Dist: numpy
+Requires-Dist: huggingface-hub
+Requires-Dist: safetensors
+Requires-Dist: pillow
+Requires-Dist: trimesh
+Requires-Dist: scipy
+Requires-Dist: scikit-image
+Requires-Dist: tqdm
+Requires-Dist: fast-simplification
+Requires-Dist: xatlas
+Requires-Dist: opencv-python
+Requires-Dist: rembg[cpu]
+Provides-Extra: dev
+Requires-Dist: pytest; extra == "dev"
+Dynamic: license-file

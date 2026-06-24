@@ -118,6 +118,9 @@ class DINOv2Backbone(nn.Module):
     def _interpolate_pos_embed(self, x: mx.array, h: int, w: int) -> mx.array:
         """Interpolate position embeddings for arbitrary resolution.
 
+        Uses bicubic interpolation with the DINOv2 offset kludge, matching
+        upstream exactly (mode='bicubic', scale_factor=(h+0.1)/M, (w+0.1)/M).
+
         Args:
             x: [B, 1+H*W, D] token sequence (CLS prepended)
             h, w: number of patch rows/cols
@@ -125,7 +128,7 @@ class DINOv2Backbone(nn.Module):
         num_patches = h * w
         num_pos = self.pos_embed.shape[1] - 1  # exclude CLS
 
-        if num_patches == num_pos:
+        if num_patches == num_pos and h == w:
             return self.pos_embed
 
         cls_pos = self.pos_embed[:, :1]  # [1, 1, D]
@@ -134,11 +137,17 @@ class DINOv2Backbone(nn.Module):
         # Original grid size (assumes square training resolution)
         orig_size = int(math.sqrt(num_pos))
 
-        # Reshape to 2D grid: [1, orig_size, orig_size, D] -> [1, D, orig_size, orig_size]
+        # Reshape to 2D grid: [1, orig_size, orig_size, D]
         patch_pos_2d = patch_pos.reshape(1, orig_size, orig_size, -1)
-        # MLX Upsample expects channels-last: [B, H, W, C]
-        # Use bilinear interpolation
-        patch_pos_2d = _bilinear_resize(patch_pos_2d, h, w)
+
+        # DINOv2 interpolate_offset kludge: use scale_factor instead of target
+        # size, with a +0.1 offset to avoid floating point edge effects.
+        # See https://github.com/facebookresearch/dino/issues/8
+        interpolate_offset = 0.1
+        sy = float(h + interpolate_offset) / orig_size
+        sx = float(w + interpolate_offset) / orig_size
+
+        patch_pos_2d = _bicubic_resize(patch_pos_2d, h, w, scale_factor=(sy, sx))
         patch_pos = patch_pos_2d.reshape(1, h * w, -1)
 
         return mx.concatenate([cls_pos, patch_pos], axis=1)
@@ -807,6 +816,64 @@ def _pil_resize(x: mx.array, target_h: int, target_w: int) -> mx.array:
     This wrapper exists for API compatibility.
     """
     return _bilinear_resize(x, target_h, target_w)
+
+
+def _bicubic_resize(x: mx.array, target_h: int, target_w: int,
+                     scale_factor: Tuple[float, float] = None) -> mx.array:
+    """Bicubic resize for [B, H, W, C] tensor (align_corners=False).
+
+    Matches PyTorch's F.interpolate(mode='bicubic', align_corners=False).
+    When scale_factor is given, output coordinates are derived from the scale
+    factor (matching PyTorch's behaviour when both size and scale_factor are
+    effectively determined by scale_factor).
+    """
+    if x.shape[1] == target_h and x.shape[2] == target_w and scale_factor is None:
+        return x
+
+    B, H, W, C = x.shape
+
+    # Coordinate mapping (align_corners=False)
+    if scale_factor is not None:
+        sy, sx = scale_factor
+        y_coords = (mx.arange(target_h).astype(mx.float32) + 0.5) / sy - 0.5
+        x_coords = (mx.arange(target_w).astype(mx.float32) + 0.5) / sx - 0.5
+    else:
+        y_coords = (mx.arange(target_h).astype(mx.float32) + 0.5) * H / target_h - 0.5
+        x_coords = (mx.arange(target_w).astype(mx.float32) + 0.5) * W / target_w - 0.5
+
+    grid_y, grid_x = mx.meshgrid(y_coords, x_coords, indexing="ij")
+
+    # For each output pixel, we need the 4x4 neighborhood
+    # Floor to get the base index (the pixel just before the fractional position)
+    iy = mx.floor(grid_y).astype(mx.int32)
+    ix = mx.floor(grid_x).astype(mx.int32)
+    fy = grid_y - iy.astype(mx.float32)
+    fx = grid_x - ix.astype(mx.float32)
+
+    # Cubic interpolation kernel (Keys' cubic, a=-0.75 matching PyTorch)
+    def _cubic_weight(t):
+        # |t| in [0, 1): w = (a+2)|t|^3 - (a+3)|t|^2 + 1
+        # |t| in [1, 2): w = a|t|^3 - 5a|t|^2 + 8a|t| - 4a
+        a = -0.75
+        at = mx.abs(t)
+        at2 = at * at
+        at3 = at2 * at
+        w01 = (a + 2) * at3 - (a + 3) * at2 + 1.0
+        w12 = a * at3 - 5 * a * at2 + 8 * a * at - 4 * a
+        return mx.where(at < 1.0, w01, mx.where(at < 2.0, w12, 0.0))
+
+    # Build result by iterating over the 4x4 kernel
+    result = mx.zeros((B, target_h, target_w, C))
+    for dy in range(-1, 3):
+        wy = _cubic_weight(fy - dy)  # [target_h, target_w]
+        yy = mx.clip(iy + dy, 0, H - 1)
+        for dx in range(-1, 3):
+            wx = _cubic_weight(fx - dx)  # [target_h, target_w]
+            xx = mx.clip(ix + dx, 0, W - 1)
+            weight = (wy * wx)[..., None]  # [target_h, target_w, 1]
+            result = result + x[:, yy, xx] * weight
+
+    return result
 
 
 def _bilinear_resize(x: mx.array, target_h: int, target_w: int) -> mx.array:

@@ -1,0 +1,16 @@
+mlx>=0.30
+numpy
+huggingface-hub
+safetensors
+pillow
+trimesh
+scipy
+scikit-image
+tqdm
+fast-simplification
+xatlas
+opencv-python
+rembg[cpu]
+
+[dev]
+pytest
