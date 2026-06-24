@@ -6,6 +6,18 @@ import numpy as np
 import pytest
 
 
+def test_module_docstring_matches_cli_backend_contract():
+    """The public backend labels should match generate_pixal3d.py flags."""
+    import trellmlx.moge_camera as moge_camera
+
+    doc = moge_camera.__doc__
+
+    assert "MLX (default)" in doc
+    assert "PyTorch/MPS (--pytorch-moge)" in doc
+    assert "--mlx-moge" not in doc
+    assert "PyTorch/MPS (default)" not in doc
+
+
 def _moge_available() -> bool:
     """Check if MoGe is importable."""
     try:

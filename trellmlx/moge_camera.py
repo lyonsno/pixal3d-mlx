@@ -4,11 +4,11 @@ Estimates camera intrinsics (FOV) from a single image using MoGe-2,
 matching the upstream Pixal3D camera conditioning pipeline.
 
 Two backends:
-  - PyTorch/MPS (default): proven exact match with upstream Pixal3D.
-    MoGe loads on MPS, infers, and unloads before MLX pipeline starts.
-  - MLX (experimental, --mlx-moge): pure MLX MoGe-2 port. Architecture
-    verified but focal recovery has precision gap due to accumulated
-    float32 drift. Use for development/testing, not production.
+  - MLX (default): pure MLX MoGe-2 port used by generate_pixal3d.py
+    unless a different backend is requested.
+  - PyTorch/MPS (--pytorch-moge): optional reference backend matching
+    upstream Pixal3D. MoGe loads on MPS, infers, and unloads before the
+    MLX pipeline starts.
 """
 
 from __future__ import annotations
