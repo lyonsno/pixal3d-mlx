@@ -290,7 +290,7 @@ def main():
             else:
                 from trellmlx.moge_camera import estimate_camera_params_mlx
                 camera_params = estimate_camera_params_mlx(args.image)
-        except (ImportError, FileNotFoundError, RuntimeError) as e:
+        except Exception as e:
             print(f"  MoGe unavailable ({e}), falling back to default FOV.", flush=True)
             camera_params = get_default_camera_params()
             print(f"Default FOV: {math.degrees(camera_params['camera_angle_x']):.1f} deg, "

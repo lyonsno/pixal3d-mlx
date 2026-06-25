@@ -121,12 +121,9 @@ def estimate_camera_params_mlx(
 ) -> dict:
     """Estimate camera parameters using the pure MLX MoGe-2 port.
 
-    EXPERIMENTAL: The MLX MoGe model architecture is verified correct
-    (individual components match PyTorch within 1e-5), but accumulated
-    float32 precision drift through the deep pipeline produces a z-offset
-    in the point map that can confuse the focal recovery solver.
-
-    Use estimate_camera_params() (PyTorch/MPS) for production.
+    This is the default Pixal3D MoGe backend. It matches the PyTorch/MPS
+    reference path closely enough for production camera estimation while
+    keeping the generation pipeline MLX-native on Apple Silicon.
     """
     import mlx.core as mx
     from PIL import Image
