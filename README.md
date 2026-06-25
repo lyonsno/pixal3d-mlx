@@ -149,6 +149,24 @@ trellmlx/
 | Mesh extraction | o_voxel CUDA + nvdiffrast | numpy dual-grid + xatlas + MLX GPU rasterizer |
 | Install | Multiple compiled CUDA/C++ packages | `pip install -e .` |
 
+## MoGe-2 Camera & Geometry Estimation
+
+Pure MLX port of [MoGe-2](https://github.com/microsoft/MoGe) (326M params, DINOv2-L/14 backbone + ConvStack decoder) for monocular geometry estimation on Apple Silicon. Supports both the base `moge-2-vitl` checkpoint (depth/points) and the `moge-2-vitl-normal` variant (adds direct normal prediction).
+
+### Precision & Performance
+
+Benchmarked on M-series Apple Silicon, BunnyCake fixture, `moge-2-vitl-normal` checkpoint. All parity measurements are against PyTorch fp32 as reference.
+
+| | Inference | Max Angular Error | Mean Angular Error |
+|---|---|---|---|
+| **MLX fp32** | **0.60s** | **0.028°** | **0.0002°** |
+| PyTorch MPS fp32 | 0.84s | — | — |
+| PyTorch MPS fp16 (default) | 0.90s | 0.420° | 0.014° |
+
+MLX loads weights in 0.27s vs 5.4s for PyTorch.
+
+See [docs/moge-camera-estimation.md](docs/moge-camera-estimation.md) for implementation details.
+
 ## Credits
 
 - [Pixal3D](https://github.com/TencentARC/Pixal3D) by TencentARC — the model and paper (SIGGRAPH 2026)
