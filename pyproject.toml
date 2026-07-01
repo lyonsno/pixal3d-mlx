@@ -17,11 +17,12 @@ dependencies = [
     "xatlas",
     "opencv-python",
     "rembg[cpu]",
+    "moge-mlx @ git+https://github.com/lyonsno/moge-mlx.git",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest"]
-# MoGe camera estimation runs via subprocess; install moge separately if needed:
+# PyTorch/MPS MoGe reference backend (--pytorch-moge flag):
 #   pip install moge @ git+https://github.com/microsoft/MoGe.git
 # NAF weight conversion (one-time): pip install torch safetensors
 
