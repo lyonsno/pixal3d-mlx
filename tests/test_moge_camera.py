@@ -13,9 +13,10 @@ def test_module_docstring_matches_cli_backend_contract():
 
     doc = moge_camera.__doc__
 
-    assert "MLX (default)" in doc
-    assert "PyTorch/MPS (--pytorch-moge)" in doc
+    assert "MLX backend only" in doc
+    assert "--no-moge" in doc
     assert "--mlx-moge" not in doc
+    assert "--pytorch-moge" not in doc
     assert "PyTorch/MPS (default)" not in doc
 
 
@@ -66,14 +67,6 @@ def test_generate_pixal3d_falls_back_when_moge_estimator_raises(monkeypatch, tmp
     assert "MoGe unavailable (bad fov metadata), falling back to default FOV." in stdout
     assert "Default FOV:" in stdout
 
-
-def _moge_available() -> bool:
-    """Check if MoGe is importable."""
-    try:
-        from moge.model import import_model_class_by_version
-        return True
-    except ImportError:
-        return False
 
 
 class TestComputeDistanceFromFov:
@@ -136,64 +129,11 @@ class TestComputeDistanceFromFov:
         assert math.isfinite(d_wide)
 
 
-class TestEstimateCameraParams:
-    """Integration tests for full MoGe estimation (requires MoGe installed)."""
+def test_pytorch_estimate_not_exported():
+    """PyTorch estimate_camera_params should not be re-exported (pure-MLX pipeline)."""
+    import trellmlx.moge_camera as moge_camera
 
-    @pytest.fixture
-    def sample_image(self, tmp_path):
-        """Create a simple test image."""
-        from PIL import Image
-        img = Image.new("RGB", (512, 512), color=(128, 64, 32))
-        path = tmp_path / "test.png"
-        img.save(path)
-        return path
-
-    @pytest.mark.skipif(
-        not _moge_available(),
-        reason="MoGe not installed",
+    assert not hasattr(moge_camera, "estimate_camera_params"), (
+        "estimate_camera_params (PyTorch) should not be exported — "
+        "pixal3d-mlx is a pure-MLX pipeline"
     )
-    def test_returns_valid_camera_params(self, sample_image):
-        from trellmlx.moge_camera import estimate_camera_params
-
-        params = estimate_camera_params(sample_image)
-
-        assert "camera_angle_x" in params
-        assert "distance" in params
-        assert "mesh_scale" in params
-
-        # FOV should be in a reasonable range (10° to 120°)
-        fov_deg = math.degrees(params["camera_angle_x"])
-        assert 10 < fov_deg < 120, f"FOV {fov_deg}° out of expected range"
-
-        # Distance should be positive and finite
-        assert params["distance"] > 0
-        assert math.isfinite(params["distance"])
-
-    @pytest.mark.skipif(
-        not _moge_available(),
-        reason="MoGe not installed",
-    )
-    def test_different_images_different_fov(self, tmp_path):
-        """Different image content should (generally) produce different FOV."""
-        from PIL import Image
-        from trellmlx.moge_camera import estimate_camera_params
-
-        # Solid color image
-        img1 = Image.new("RGB", (512, 512), color=(200, 200, 200))
-        path1 = tmp_path / "solid.png"
-        img1.save(path1)
-
-        # Gradient image (simulates perspective)
-        arr = np.zeros((512, 512, 3), dtype=np.uint8)
-        for i in range(512):
-            arr[i, :, :] = int(255 * i / 511)
-        img2 = Image.fromarray(arr)
-        path2 = tmp_path / "gradient.png"
-        img2.save(path2)
-
-        p1 = estimate_camera_params(path1)
-        p2 = estimate_camera_params(path2)
-
-        # They should both be valid even if similar
-        assert 10 < math.degrees(p1["camera_angle_x"]) < 120
-        assert 10 < math.degrees(p2["camera_angle_x"]) < 120

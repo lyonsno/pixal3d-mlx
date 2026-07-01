@@ -5,19 +5,16 @@ estimate camera intrinsics (FOV, distance) from the input image. This replaces
 the fixed default FOV (49.1°) with per-image estimates, which improves
 projection conditioning for photos, angled shots, and non-centered objects.
 
-## Backends
+## Backend
 
 **MLX (default):** Pure MLX port of MoGe-2 (326M parameters). No PyTorch
 dependency. Loads in ~1s, infers in ~2.6s on M4 Max.
-
-**PyTorch/MPS (`--pytorch-moge`):** Uses PyTorch MoGe via MPS. Requires
-`moge` package (`pip install moge`). Infers in ~1.9s but loads in ~6s.
 
 **Disabled (`--no-moge`):** Falls back to fixed 49.1° FOV. Use when MoGe
 weights are not downloaded or for reproducibility with a known camera.
 
 **Manual (`--fov <radians>`):** Override with a specific FOV. Takes priority
-over all other methods.
+over MoGe estimation.
 
 ## Parity
 

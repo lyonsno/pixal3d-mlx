@@ -22,8 +22,6 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest"]
-# PyTorch/MPS MoGe reference backend (--pytorch-moge flag):
-#   pip install moge @ git+https://github.com/microsoft/MoGe.git
 # NAF weight conversion (one-time): pip install torch safetensors
 
 # Note: trellmlx package name is retained for import compatibility —

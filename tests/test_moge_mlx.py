@@ -17,14 +17,12 @@ def test_moge_mlx_import():
 
 
 def test_moge_camera_reexports():
-    """trellmlx.moge_camera should re-export from moge_mlx.camera."""
+    """trellmlx.moge_camera should re-export MLX functions from moge_mlx.camera."""
     from trellmlx.moge_camera import (
-        estimate_camera_params,
         estimate_camera_params_mlx,
         _compute_distance_from_fov,
     )
 
-    assert callable(estimate_camera_params)
     assert callable(estimate_camera_params_mlx)
     assert callable(_compute_distance_from_fov)
 
