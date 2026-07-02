@@ -358,14 +358,22 @@ def main():
     if args.quantize:
         from trellmlx.quantize import quantize_model
         quantize_model(ss_flow, bits=args.quantize)
+    # Upcast sparse structure flow to fp32 for CFG rescale stability.
+    # bf16 precision noise gets amplified ~5x per Euler step through the
+    # std ratio in CFG rescale, producing catastrophic divergence after
+    # 4 steps. fp32 reduces this. Cost: ~2.4GB extra for ~20s.
+    ss_flow.apply(lambda x: x.astype(mx.float32))
 
     # SS sampler params from Pixal3D pipeline.json
     SS_SAMPLER = dict(steps=12, guidance_strength=7.5, guidance_rescale=0.7,
                       guidance_interval=(0.6, 1.0), rescale_t=5.0)
 
-    noise = mx.random.normal((1, 8, 16, 16, 16))
+    noise = mx.random.normal((1, 8, 16, 16, 16)).astype(mx.float32)
     t0 = time.perf_counter()
-    z_s = flow_euler_sample(ss_flow, noise, ss_cond, ss_neg_cond, verbose=False, **SS_SAMPLER)
+    # Cast conditioning to fp32 to match the fp32 sparse structure model
+    z_s = flow_euler_sample(ss_flow, noise,
+                            ss_cond.astype(mx.float32), ss_neg_cond.astype(mx.float32),
+                            verbose=False, **SS_SAMPLER)
     mx.eval(z_s)
     print(f"  Sampled: {time.perf_counter()-t0:.1f}s", flush=True)
 
