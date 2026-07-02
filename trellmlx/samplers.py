@@ -10,6 +10,35 @@ import mlx.core as mx
 import numpy as np
 
 
+def _cfg_rescale(x_0_pos: mx.array, x_0_cfg: mx.array) -> mx.array:
+    """Apply CFG rescale: match x_0_cfg's std to x_0_pos's std per batch element.
+
+    Uses Bessel-corrected std (ddof=1) to match PyTorch torch.std().
+    Clamps the ratio to [0.5, 2.0] to prevent bf16 noise cascading.
+    Safe for zero-std inputs (returns x_0_cfg unchanged).
+
+    Args:
+        x_0_pos: Positive-conditioned x_0 estimate [B, C, ...].
+        x_0_cfg: CFG-combined x_0 estimate [B, C, ...].
+
+    Returns:
+        Rescaled x_0_cfg, same shape as input.
+    """
+    reduce_dims = list(range(1, x_0_pos.ndim))
+    n = 1
+    for d in reduce_dims:
+        n *= x_0_pos.shape[d]
+    bessel = n / (n - 1)
+    std_pos = mx.sqrt(mx.var(x_0_pos, axis=reduce_dims, keepdims=True) * bessel)
+    std_cfg = mx.sqrt(mx.var(x_0_cfg, axis=reduce_dims, keepdims=True) * bessel)
+
+    safe_std_cfg = mx.where(std_cfg > 0, std_cfg, mx.ones_like(std_cfg))
+    ratio = std_pos / safe_std_cfg
+    ratio = mx.where(std_cfg > 0, ratio, mx.ones_like(ratio))
+    ratio = mx.clip(ratio, 0.5, 2.0)
+    return x_0_cfg * ratio
+
+
 def flow_euler_sample(
     model,
     noise: mx.array,
@@ -79,24 +108,12 @@ def flow_euler_sample(
                 x_0_pos = _pred_to_xstart(sample, t, pred_pos, sigma_min)
                 x_0_cfg = _pred_to_xstart(sample, t, pred, sigma_min)
 
-                reduce_dims = list(range(1, x_0_pos.ndim))
                 # Match PyTorch torch.std() Bessel correction (ddof=1).
                 # Clamp the ratio to [0.5, 2.0] to prevent bf16 precision
                 # noise from cascading through Euler steps — the std ratio
                 # amplifies ~5x per step, producing catastrophic divergence
                 # after 4 steps without clamping.
-                n = 1
-                for d in reduce_dims:
-                    n *= x_0_pos.shape[d]
-                bessel = n / (n - 1)
-                std_pos = mx.sqrt(mx.var(x_0_pos, axis=reduce_dims, keepdims=True) * bessel)
-                std_cfg = mx.sqrt(mx.var(x_0_cfg, axis=reduce_dims, keepdims=True) * bessel)
-
-                safe_std_cfg = mx.where(std_cfg > 0, std_cfg, mx.ones_like(std_cfg))
-                ratio = std_pos / safe_std_cfg
-                ratio = mx.where(std_cfg > 0, ratio, mx.ones_like(ratio))
-                ratio = mx.clip(ratio, 0.5, 2.0)
-                x_0_rescaled = x_0_cfg * ratio
+                x_0_rescaled = _cfg_rescale(x_0_pos, x_0_cfg)
                 x_0 = guidance_rescale * x_0_rescaled + (1 - guidance_rescale) * x_0_cfg
                 pred = _xstart_to_pred(sample, t, x_0, sigma_min)
         else:
