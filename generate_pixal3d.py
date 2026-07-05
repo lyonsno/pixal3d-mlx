@@ -172,6 +172,13 @@ def extract_proj_features(image_path, dinov3_model, grid_resolution, image_size,
     return cond, neg_cond
 
 
+def cast_conditioning_to_dtype(cond, dtype):
+    """Cast an MLX conditioning payload without changing its container shape."""
+    if isinstance(cond, dict):
+        return {key: cast_conditioning_to_dtype(value, dtype) for key, value in cond.items()}
+    return cond.astype(dtype)
+
+
 def index_proj_by_coords(cond, neg_cond, coords_4d, grid_resolution, target_dim=None):
     """Index full-grid projection features by sparse coordinates.
 
@@ -372,7 +379,8 @@ def main():
     t0 = time.perf_counter()
     # Cast conditioning to fp32 to match the fp32 sparse structure model
     z_s = flow_euler_sample(ss_flow, noise,
-                            ss_cond.astype(mx.float32), ss_neg_cond.astype(mx.float32),
+                            cast_conditioning_to_dtype(ss_cond, mx.float32),
+                            cast_conditioning_to_dtype(ss_neg_cond, mx.float32),
                             verbose=False, **SS_SAMPLER)
     mx.eval(z_s)
     print(f"  Sampled: {time.perf_counter()-t0:.1f}s", flush=True)
