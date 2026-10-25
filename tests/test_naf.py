@@ -6,6 +6,8 @@ weight loading, and integration with DinoV3ProjFeatureExtractor.
 
 import os
 import math
+import json
+from pathlib import Path
 import pytest
 import mlx.core as mx
 import mlx.nn as nn
@@ -162,6 +164,23 @@ class TestNAFRoPE:
 
 class TestEncBlock:
     """Test residual conv block."""
+
+    @pytest.mark.parametrize("norm_name", ["norm1", "norm2"])
+    def test_groupnorm_matches_recorded_pytorch_reference(self, norm_name):
+        """Replay PyTorch CPU output for NAF's contiguous channel groups.
+
+        Fixture provenance and deterministic input recipes are stored beside
+        the observed output; this does not require torch at test runtime.
+        """
+        fixture = json.loads((Path(__file__).parent / "fixtures" /
+                              "naf_groupnorm_pytorch.json").read_text())
+        x = mx.arange(48, dtype=mx.float32).reshape(1, 2, 3, 8) ** 2 / 100
+        norm = getattr(EncBlock(channels=8, num_groups=2), norm_name)
+        norm.weight = mx.linspace(0.5, 1.5, 8)
+        norm.bias = mx.linspace(-0.3, 0.4, 8)
+        actual = np.array(norm(x))
+        expected = np.array(fixture["expected_nhwc"], dtype=np.float32).reshape(fixture["shape"])
+        np.testing.assert_allclose(actual, expected, rtol=2e-5, atol=2e-5)
 
     def test_output_shape(self):
         """EncBlock should preserve spatial dims and channels."""

@@ -145,14 +145,15 @@ def main():
 
     tex_image_size = 1024
     tex_naf_size = 512
-    print(f"  Extracting proj features (tex, {tex_image_size}, grid=64, NAF to {tex_naf_size})...", flush=True)
+    tex_grid_resolution = hr_resolution // 16
+    print(f"  Extracting proj features (tex, {tex_image_size}, grid={tex_grid_resolution}, NAF to {tex_naf_size})...", flush=True)
     tex_cond, tex_neg_cond = extract_proj_features(
-        args.image, dinov3, grid_resolution=64, image_size=tex_image_size,
+        args.image, dinov3, grid_resolution=tex_grid_resolution, image_size=tex_image_size,
         camera_params=camera_params, no_rembg=args.no_rembg,
         use_naf_upsample=True, upsample_target_size=tex_naf_size, naf_model=naf,
     )
     tex_cond_sparse, tex_neg_cond_sparse = index_proj_by_coords(
-        tex_cond, tex_neg_cond, quant_coords, grid_resolution=64,
+        tex_cond, tex_neg_cond, quant_coords, grid_resolution=tex_grid_resolution,
     )
 
     tex_flow = Pixal3DSLatFlowModel(

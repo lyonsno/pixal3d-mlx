@@ -172,6 +172,13 @@ def extract_proj_features(image_path, dinov3_model, grid_resolution, image_size,
     return cond, neg_cond
 
 
+def cast_conditioning_to_dtype(cond, dtype):
+    """Cast an MLX conditioning payload without changing its container shape."""
+    if isinstance(cond, dict):
+        return {key: cast_conditioning_to_dtype(value, dtype) for key, value in cond.items()}
+    return cond.astype(dtype)
+
+
 def index_proj_by_coords(cond, neg_cond, coords_4d, grid_resolution, target_dim=None):
     """Index full-grid projection features by sparse coordinates.
 
@@ -362,7 +369,7 @@ def main():
     # bf16 precision noise gets amplified ~5x per Euler step through the
     # std ratio in CFG rescale, producing catastrophic divergence after
     # 4 steps. fp32 reduces this. Cost: ~2.4GB extra for ~20s.
-    ss_flow.apply(lambda x: x.astype(mx.float32))
+    ss_flow.apply(lambda x: x.astype(mx.float32) if mx.issubdtype(x.dtype, mx.floating) else x)
 
     # SS sampler params from Pixal3D pipeline.json
     SS_SAMPLER = dict(steps=12, guidance_strength=7.5, guidance_rescale=0.7,
@@ -372,7 +379,8 @@ def main():
     t0 = time.perf_counter()
     # Cast conditioning to fp32 to match the fp32 sparse structure model
     z_s = flow_euler_sample(ss_flow, noise,
-                            ss_cond.astype(mx.float32), ss_neg_cond.astype(mx.float32),
+                            cast_conditioning_to_dtype(ss_cond, mx.float32),
+                            cast_conditioning_to_dtype(ss_neg_cond, mx.float32),
                             verbose=False, **SS_SAMPLER)
     mx.eval(z_s)
     print(f"  Sampled: {time.perf_counter()-t0:.1f}s", flush=True)
@@ -506,21 +514,20 @@ def main():
     # === Stage 2c: HR Shape Latent (proj, 1024) ===
     print("\n=== Stage 2c: HR Shape Latent (proj, 1024) ===", flush=True)
 
-    # Extract proj features for shape HR stage
-    # Upstream uses image_size=1024, grid=64, but DINOv3 at 1024x1024 is
-    # very memory-intensive on unified memory Macs (4096 patches, O(n²) attention).
-    # Use 512 image with grid=64 as a practical tradeoff for now.
+    # Projection and sparse coordinates must describe the same physical grid.
+    # Upstream overrides the projection grid with actual_hr_resolution // 16.
+    hr_grid_resolution = hr_resolution // 16
     hr_image_size = 1024
-    print(f"  Extracting proj features (shape HR, {hr_image_size}, grid=64, NAF upsample to 512)...", flush=True)
+    print(f"  Extracting proj features (shape HR, {hr_image_size}, grid={hr_grid_resolution}, NAF upsample to 512)...", flush=True)
     shape_hr_cond, shape_hr_neg_cond = extract_proj_features(
-        args.image, dinov3, grid_resolution=64, image_size=hr_image_size,
+        args.image, dinov3, grid_resolution=hr_grid_resolution, image_size=hr_image_size,
         camera_params=camera_params, no_rembg=args.no_rembg,
         use_naf_upsample=True, upsample_target_size=512, naf_model=naf,
     )
 
     # Index by HR sparse coordinates
     shape_hr_cond_sparse, shape_hr_neg_cond_sparse = index_proj_by_coords(
-        shape_hr_cond, shape_hr_neg_cond, quant_coords, grid_resolution=64,
+        shape_hr_cond, shape_hr_neg_cond, quant_coords, grid_resolution=hr_grid_resolution,
     )
 
     hr_slat_flow = Pixal3DSLatFlowModel(
@@ -628,14 +635,14 @@ def main():
     # Upstream uses NAF to 1024 for texture, but that's too large for
     # windowed attention on unified memory (GPU page fault). Use 512.
     tex_naf_size = 512
-    print(f"  Extracting proj features (tex, {tex_image_size}, grid=64, NAF upsample to {tex_naf_size})...", flush=True)
+    print(f"  Extracting proj features (tex, {tex_image_size}, grid={hr_grid_resolution}, NAF upsample to {tex_naf_size})...", flush=True)
     tex_cond, tex_neg_cond = extract_proj_features(
-        args.image, dinov3, grid_resolution=64, image_size=tex_image_size,
+        args.image, dinov3, grid_resolution=hr_grid_resolution, image_size=tex_image_size,
         camera_params=camera_params, no_rembg=args.no_rembg,
         use_naf_upsample=True, upsample_target_size=tex_naf_size, naf_model=naf,
     )
     tex_cond_sparse, tex_neg_cond_sparse = index_proj_by_coords(
-        tex_cond, tex_neg_cond, quant_coords, grid_resolution=64,
+        tex_cond, tex_neg_cond, quant_coords, grid_resolution=hr_grid_resolution,
     )
 
     tex_flow = Pixal3DSLatFlowModel(

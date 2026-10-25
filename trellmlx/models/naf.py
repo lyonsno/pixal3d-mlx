@@ -106,9 +106,9 @@ class EncBlock(nn.Module):
     def __init__(self, channels: int, kernel_size: int = 3, num_groups: int = 8):
         super().__init__()
         self.pad = kernel_size // 2
-        self.norm1 = nn.GroupNorm(num_groups, channels)
+        self.norm1 = nn.GroupNorm(num_groups, channels, pytorch_compatible=True)
         self.conv1 = nn.Conv2d(channels, channels, kernel_size, padding=0)
-        self.norm2 = nn.GroupNorm(num_groups, channels)
+        self.norm2 = nn.GroupNorm(num_groups, channels, pytorch_compatible=True)
         self.conv2 = nn.Conv2d(channels, channels, kernel_size, padding=0)
 
     def __call__(self, x: mx.array) -> mx.array:
