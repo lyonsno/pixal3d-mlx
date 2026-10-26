@@ -11,12 +11,14 @@ import numpy as np
 from PIL import Image
 
 
-def preprocess_image(image_path: str, max_size: int = 1024) -> Image.Image:
+def preprocess_image(image_path: str, max_size: int = 1024, crop_scale: float = 1.0) -> Image.Image:
     """Remove background and center-crop the object.
 
     Args:
         image_path: Path to input image.
         max_size: Downscale if larger than this.
+        crop_scale: Square crop side as a multiple of the alpha bbox side
+            (1.0 for TRELLIS.2, 1.1 for Pixal3D).
 
     Returns:
         RGB PIL Image with background removed (black) and object centered.
@@ -58,17 +60,19 @@ def preprocess_image(image_path: str, max_size: int = 1024) -> Image.Image:
     y_min, x_min = foreground.min(axis=0)
     y_max, x_max = foreground.max(axis=0)
 
-    # Square crop centered on object
+    # Square crop centered on object. Float center and box follow the source
+    # pipelines; Pixal3D adds a 1.1x margin (pixal3d_image_to_3d.py:177),
+    # TRELLIS.2 uses 1.0.
     center_x = (x_min + x_max) / 2
     center_y = (y_min + y_max) / 2
     size = max(x_max - x_min, y_max - y_min)
-    half = size // 2
+    size = int(size * crop_scale)
 
     bbox = (
-        int(center_x - half),
-        int(center_y - half),
-        int(center_x + half),
-        int(center_y + half),
+        center_x - size // 2,
+        center_y - size // 2,
+        center_x + size // 2,
+        center_y + size // 2,
     )
     output = output.crop(bbox)
 

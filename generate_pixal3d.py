@@ -97,6 +97,33 @@ def get_default_camera_params(fov_rad=0.8575560450553894, mesh_scale=1.0):
     }
 
 
+PIXAL3D_CROP_SCALE = 1.1  # upstream pixal3d_image_to_3d.py:177
+
+
+def prepare_conditioning_image(image_path, output_path, no_rembg=False):
+    """Preprocess once, as upstream inference.py does, and return the image path
+    that both MoGe-2 and every projection stage must consume."""
+    if no_rembg:
+        return image_path
+    from trellmlx.preprocess import preprocess_image as rembg_preprocess
+    out_dir = os.path.dirname(os.path.abspath(output_path))
+    os.makedirs(out_dir, exist_ok=True)
+    stem = os.path.splitext(os.path.basename(output_path))[0]
+    prepared_path = os.path.join(out_dir, f"{stem}_preprocessed.png")
+    rembg_preprocess(image_path, crop_scale=PIXAL3D_CROP_SCALE).save(prepared_path)
+    print(f"  Conditioning image: {prepared_path}", flush=True)
+    return prepared_path
+
+
+def load_checkpointed_camera(ckpt_dir):
+    """Return the camera saved with a generation checkpoint, or None."""
+    from trellmlx.checkpoint import load_checkpoint
+    if not os.path.exists(os.path.join(ckpt_dir, "camera.json")):
+        return None
+    meta = load_checkpoint(ckpt_dir, "camera")
+    return {key: float(meta[key]) for key in ("camera_angle_x", "distance", "mesh_scale")}
+
+
 # === Helpers ===
 
 def _denormalize_slat(slat, mean=SHAPE_SLAT_MEAN, std=SHAPE_SLAT_STD):
@@ -150,7 +177,7 @@ def extract_proj_features(image_path, dinov3_model, grid_resolution, image_size,
     if not no_rembg:
         try:
             from trellmlx.preprocess import preprocess_image as rembg_preprocess
-            img = rembg_preprocess(image_path)
+            img = rembg_preprocess(image_path, crop_scale=PIXAL3D_CROP_SCALE)
         except ImportError:
             pass
 
@@ -282,6 +309,9 @@ def main():
     t_total = time.perf_counter()
     mx.metal.reset_peak_memory()
 
+    # One preprocessed image feeds MoGe and every stage (upstream inference.py:192-215)
+    cond_image = prepare_conditioning_image(args.image, args.output, no_rembg=args.no_rembg)
+
     # Camera parameters: manual FOV > MoGe auto > default
     if args.fov > 0:
         camera_params = get_default_camera_params(fov_rad=args.fov)
@@ -290,7 +320,7 @@ def main():
         try:
             print("=== MoGe-2 Camera Estimation (MLX) ===", flush=True)
             from trellmlx.moge_camera import estimate_camera_params_mlx
-            camera_params = estimate_camera_params_mlx(args.image)
+            camera_params = estimate_camera_params_mlx(cond_image)
         except Exception as e:
             print(f"  MoGe unavailable ({e}), falling back to default FOV.", flush=True)
             camera_params = get_default_camera_params()
@@ -314,6 +344,8 @@ def main():
 
     ckpt_dir = args.save_checkpoints
     save_ckpts = ckpt_dir is not None
+    if save_ckpts:
+        save_checkpoint(ckpt_dir, "camera", **{k: float(camera_params[k]) for k in ("camera_angle_x", "distance", "mesh_scale")})
 
     # === DINOv3 backbone (shared across stages) ===
     print("=== Loading DINOv3 backbone ===", flush=True)
@@ -350,8 +382,8 @@ def main():
     # Extract features for SS stage (grid_resolution=16, image_size=512)
     print("  Extracting proj features (SS, 512, grid=16)...", flush=True)
     ss_cond, ss_neg_cond = extract_proj_features(
-        args.image, dinov3, grid_resolution=16, image_size=512,
-        camera_params=camera_params, no_rembg=args.no_rembg,
+        cond_image, dinov3, grid_resolution=16, image_size=512,
+        camera_params=camera_params, no_rembg=True,
     )
 
     ss_flow = Pixal3DSparseStructureFlowModel(
@@ -437,8 +469,8 @@ def main():
     # and zero-pad the second half. For now, use grid_resolution=32.
     print("  Extracting proj features (shape LR, 512, grid=32, NAF upsample to 512)...", flush=True)
     shape_lr_cond, shape_lr_neg_cond = extract_proj_features(
-        args.image, dinov3, grid_resolution=32, image_size=512,
-        camera_params=camera_params, no_rembg=args.no_rembg,
+        cond_image, dinov3, grid_resolution=32, image_size=512,
+        camera_params=camera_params, no_rembg=True,
         use_naf_upsample=True, upsample_target_size=512, naf_model=naf,
     )
 
@@ -520,8 +552,8 @@ def main():
     hr_image_size = 1024
     print(f"  Extracting proj features (shape HR, {hr_image_size}, grid={hr_grid_resolution}, NAF upsample to 512)...", flush=True)
     shape_hr_cond, shape_hr_neg_cond = extract_proj_features(
-        args.image, dinov3, grid_resolution=hr_grid_resolution, image_size=hr_image_size,
-        camera_params=camera_params, no_rembg=args.no_rembg,
+        cond_image, dinov3, grid_resolution=hr_grid_resolution, image_size=hr_image_size,
+        camera_params=camera_params, no_rembg=True,
         use_naf_upsample=True, upsample_target_size=512, naf_model=naf,
     )
 
@@ -637,8 +669,8 @@ def main():
     tex_naf_size = 512
     print(f"  Extracting proj features (tex, {tex_image_size}, grid={hr_grid_resolution}, NAF upsample to {tex_naf_size})...", flush=True)
     tex_cond, tex_neg_cond = extract_proj_features(
-        args.image, dinov3, grid_resolution=hr_grid_resolution, image_size=tex_image_size,
-        camera_params=camera_params, no_rembg=args.no_rembg,
+        cond_image, dinov3, grid_resolution=hr_grid_resolution, image_size=tex_image_size,
+        camera_params=camera_params, no_rembg=True,
         use_naf_upsample=True, upsample_target_size=tex_naf_size, naf_model=naf,
     )
     tex_cond_sparse, tex_neg_cond_sparse = index_proj_by_coords(

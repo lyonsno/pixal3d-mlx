@@ -71,6 +71,8 @@ def test_ss_entrypoint_preserves_conditioning_and_packed_weights(monkeypatch, bi
     monkeypatch.setattr(pixal_flow, "Pixal3DSparseStructureFlowModel", TinyFlow)
     monkeypatch.setattr(generate_pixal3d, "extract_proj_features", lambda *a, **k: (cond, neg))
     monkeypatch.setattr(samplers, "flow_euler_sample", sample)
+    # Preprocessing is exercised in test_pixal3d_conditioning_inputs.py.
+    monkeypatch.setattr(generate_pixal3d, "prepare_conditioning_image", lambda image, output, no_rembg=False: image)
     with pytest.raises(ReachedSampler):
         generate_pixal3d.main()
 
@@ -199,5 +201,7 @@ def test_hr_and_texture_projection_follow_actual_latent_grid(monkeypatch, resolu
     monkeypatch.setattr(samplers, "flow_euler_sample", sample)
     monkeypatch.setattr(mesh_extract, "decoder_output_to_mesh", lambda *a, **k: ([], []))
     monkeypatch.setattr(generate, "_cleanup_and_simplify_mesh", lambda v, f, **k: (v, f))
+    # Preprocessing is exercised in test_pixal3d_conditioning_inputs.py.
+    monkeypatch.setattr(generate_pixal3d, "prepare_conditioning_image", lambda image, output, no_rembg=False: image)
     with pytest.raises(ReachedSampler):
         generate_pixal3d.main()

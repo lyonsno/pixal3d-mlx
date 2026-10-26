@@ -51,11 +51,19 @@ def main():
     from trellmlx.cleanup import cleanup_model
     from trellmlx.checkpoint import load_checkpoint
 
-    # Camera
+    # Camera: manual FOV > camera saved with the generation checkpoint > default
+    from generate_pixal3d import load_checkpointed_camera
+    saved_camera = load_checkpointed_camera(args.ckpt)
     if args.fov > 0:
         camera_params = get_default_camera_params(fov_rad=args.fov)
+    elif saved_camera is not None:
+        camera_params = saved_camera
+        print(f"  Checkpointed camera: fov={camera_params['camera_angle_x']:.4f} rad, "
+              f"distance={camera_params['distance']:.4f}", flush=True)
     else:
         camera_params = get_default_camera_params()
+        print("  WARNING: checkpoint has no camera.json; resumed stages use the default FOV, "
+              "not the camera that produced the shape.", flush=True)
 
     HF_PIXAL3D = os.path.expanduser(
         "~/.cache/huggingface/hub/models--TencentARC--Pixal3D/"

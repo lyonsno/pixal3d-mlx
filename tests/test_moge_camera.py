@@ -60,6 +60,8 @@ def test_generate_pixal3d_falls_back_when_moge_estimator_raises(monkeypatch, tmp
 
     monkeypatch.setattr("builtins.__import__", stop_after_camera)
 
+    # Preprocessing is exercised in test_pixal3d_conditioning_inputs.py.
+    monkeypatch.setattr(generate_pixal3d, "prepare_conditioning_image", lambda image, output, no_rembg=False: image)
     with pytest.raises(RuntimeError, match="stop after camera fallback"):
         generate_pixal3d.main()
 
