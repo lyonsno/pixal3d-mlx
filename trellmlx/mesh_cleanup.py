@@ -211,11 +211,16 @@ def fill_small_holes(
     if len(faces) == 0 or max_hole_perimeter <= 0:
         return vertices, faces
 
-    # Find boundary edges (edges that appear in only one face)
+    # Find boundary edges (edges that appear in only one face). Keep the
+    # directed occurrences so caps can traverse each boundary edge opposite
+    # to its existing face (consistent winding).
     edge_count = {}
+    directed_edges = set()
     for face in faces:
         for i in range(3):
-            e = tuple(sorted((face[i], face[(i + 1) % 3])))
+            a, b = int(face[i]), int(face[(i + 1) % 3])
+            directed_edges.add((a, b))
+            e = tuple(sorted((a, b)))
             edge_count[e] = edge_count.get(e, 0) + 1
 
     boundary_edges = {e for e, c in edge_count.items() if c == 1}
@@ -282,7 +287,11 @@ def fill_small_holes(
             for i in range(len(loop))
         )
         for v0, v1 in loop_edges:
-            new_faces.append([v1, v0, centroid_idx])
+            # Existing face traverses v0->v1: cap traverses v1->v0.
+            if (v0, v1) in directed_edges:
+                new_faces.append([v1, v0, centroid_idx])
+            else:
+                new_faces.append([v0, v1, centroid_idx])
         filled += 1
 
     if verbose and filled > 0:
@@ -388,9 +397,9 @@ def repair_non_manifold_edges(
     # Only manifold edges contribute vertex-adjacency pairs in cumesh.
     group_sizes = np.diff(breaks)
     manifold_mask = group_sizes == 2
-    if not manifold_mask.any():
-        return vertices, faces
-    if manifold_mask.all():
+    if not (group_sizes > 2).any():
+        # No overloaded edge: nothing to split. (Overloaded edges with no
+        # manifold pairs still need corner reconstruction below.)
         return vertices, faces
 
     parent = np.arange(n_faces * 3, dtype=np.int64)
