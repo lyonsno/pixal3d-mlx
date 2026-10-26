@@ -100,7 +100,22 @@ def _cleanup_and_simplify_mesh(
     """Run mesh cleanup and multi-pass simplification."""
     if not no_cleanup:
         if cleanup_mesh is None:
-            from trellmlx.mesh_cleanup import cleanup_mesh
+            from trellmlx.mesh_cleanup import cleanup_mesh as local_cleanup
+
+            component_filter_applied = False
+
+            def cleanup_mesh(vertices, faces, **kwargs):
+                # The first pass filters components before splitting
+                # non-manifold edges. Later passes must not reinterpret the
+                # fragments that split produced as new debris (trellis2mlx
+                # d642ab6).
+                nonlocal component_filter_applied
+                if component_filter_applied:
+                    kwargs["min_component_area"] = 0
+                    kwargs["keep_largest"] = False
+                result = local_cleanup(vertices, faces, **kwargs)
+                component_filter_applied = True
+                return result
         t0 = time.perf_counter()
         vertices, faces = cleanup_mesh(vertices, faces, keep_largest=keep_largest, do_fix_normals=False)
         log(f"  Cleanup pass 1: {time.perf_counter()-t0:.1f}s", flush=True)

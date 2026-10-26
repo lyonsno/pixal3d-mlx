@@ -101,18 +101,24 @@ class TestRemoveDuplicateFaces:
 
 
 class TestRepairNonManifoldEdges:
-    def test_removes_non_manifold_faces(self):
-        """An edge shared by 3+ faces is non-manifold. Repair should reduce to 2."""
+    def test_splits_non_manifold_edges_without_removing_faces(self):
+        """Source cumesh repairs non-manifold edges by vertex splitting (trellis2mlx cd72079)."""
         verts, faces = _make_tetrahedron()
-        # Add extra face sharing edge (0,1) — now edge (0,1) has 3 adjacent faces
+        # Add extra face sharing edge (0,1): edge (0,1) now has 3 adjacent faces
         extra_vert = np.array([[0.5, -1, 0.5]], dtype=np.float32)
         verts = np.vstack([verts, extra_vert])
         extra_face = np.array([[0, 1, 4]], dtype=np.int64)
         faces = np.vstack([faces, extra_face])
 
         cleaned_v, cleaned_f = repair_non_manifold_edges(verts, faces)
-        # The extra face (smallest area on edge 0,1) should be removed
-        assert len(cleaned_f) == 4
+        assert len(cleaned_f) == len(faces)
+        assert len(cleaned_v) > len(verts)
+        edge_counts = {}
+        for face in cleaned_f:
+            for i in range(3):
+                edge = tuple(sorted((int(face[i]), int(face[(i + 1) % 3]))))
+                edge_counts[edge] = edge_counts.get(edge, 0) + 1
+        assert max(edge_counts.values()) <= 2
 
     def test_noop_on_manifold_mesh(self):
         verts, faces = _make_tetrahedron()
@@ -320,11 +326,11 @@ class TestDefaultCleanupUsesSmallComponentRemoval:
         # Both should survive — they're equal size, both above threshold
         assert len(cleaned_f) == 8
 
-    def test_cleanup_mesh_accepts_min_component_ratio(self):
-        """cleanup_mesh should accept min_component_ratio parameter."""
+    def test_cleanup_mesh_accepts_min_component_area(self):
+        """cleanup_mesh takes the source-named area threshold (o_voxel postprocess.py:143)."""
         v1, f1 = _make_tetrahedron()
         cleaned_v, cleaned_f = cleanup_mesh(
-            v1, f1, min_component_ratio=1e-5, verbose=False,
+            v1, f1, min_component_area=1e-5, verbose=False,
         )
         assert len(cleaned_f) == 4
 
