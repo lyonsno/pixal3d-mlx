@@ -261,6 +261,8 @@ def fill_small_holes(
 
     # Fill loops whose perimeter is below the threshold
     new_faces = list(faces)
+    new_centroids = []
+    next_vertex_idx = len(vertices)
     filled = 0
     skipped = 0
     for loop in loops:
@@ -275,8 +277,9 @@ def fill_small_holes(
 
         # Fan triangulation from the centroid
         centroid = loop_verts.mean(axis=0)
-        centroid_idx = len(vertices)
-        vertices = np.vstack([vertices, centroid[None]])
+        centroid_idx = next_vertex_idx
+        next_vertex_idx += 1
+        new_centroids.append(centroid)
         loop_edges = sorted(
             tuple(sorted((int(loop[i]), int(loop[(i + 1) % len(loop)]))))
             for i in range(len(loop))
@@ -288,6 +291,11 @@ def fill_small_holes(
         for v0, v1 in loop_edges:
             new_faces.append([v1, v0, centroid_idx])
         filled += 1
+
+    if new_centroids:
+        vertices = np.vstack(
+            [vertices, np.asarray(new_centroids, dtype=vertices.dtype)]
+        )
 
     if verbose and filled > 0:
         print(f"  Filled {filled} holes ({skipped} too large, "
