@@ -97,7 +97,21 @@ def _cleanup_and_simplify_mesh(
     simplify=None,
     log=print,
 ):
-    """Run mesh cleanup and multi-pass simplification."""
+    """Run mesh cleanup and multi-pass simplification.
+
+    Every cleaned exit ends with one winding-unification pass, as the source
+    pipeline always orients after fill_holes (whose caps are not coherent).
+    """
+    # The local cleanup route owns final orientation; an injected cleanup
+    # route owns its own.
+    local_orientation = cleanup_mesh is None and not no_cleanup
+
+    def finish(vertices, faces):
+        if not local_orientation:
+            return vertices, faces
+        from trellmlx.mesh_cleanup import fix_normals
+        return fix_normals(vertices, faces, verbose=False)
+
     if not no_cleanup:
         if cleanup_mesh is None:
             from trellmlx.mesh_cleanup import cleanup_mesh as local_cleanup
@@ -121,7 +135,7 @@ def _cleanup_and_simplify_mesh(
         log(f"  Cleanup pass 1: {time.perf_counter()-t0:.1f}s", flush=True)
 
     if not target_faces or len(faces) <= target_faces:
-        return vertices, faces
+        return finish(vertices, faces)
 
     if simplify is None:
         import fast_simplification
@@ -140,7 +154,7 @@ def _cleanup_and_simplify_mesh(
             vertices, faces = cleanup_mesh(vertices, faces, keep_largest=keep_largest, do_fix_normals=False, verbose=False)
 
     if len(faces) <= target_faces:
-        return vertices, faces
+        return finish(vertices, faces)
 
     # Pass 2: Final simplify to target, then cleanup
     t0 = time.perf_counter()
@@ -164,8 +178,9 @@ def _cleanup_and_simplify_mesh(
         t0 = time.perf_counter()
         vertices, faces = cleanup_mesh(vertices, faces, keep_largest=keep_largest)
         log(f"  Cleanup pass 2: {time.perf_counter()-t0:.1f}s", flush=True)
+        return vertices, faces  # cleanup_mesh's default pass fixes normals
 
-    return vertices, faces
+    return finish(vertices, faces)
 
 
 def main():

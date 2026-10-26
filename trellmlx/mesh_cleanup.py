@@ -211,16 +211,11 @@ def fill_small_holes(
     if len(faces) == 0 or max_hole_perimeter <= 0:
         return vertices, faces
 
-    # Find boundary edges (edges that appear in only one face). Keep the
-    # directed occurrences so caps can traverse each boundary edge opposite
-    # to its existing face (consistent winding).
+    # Find boundary edges (edges that appear in only one face)
     edge_count = {}
-    directed_edges = set()
     for face in faces:
         for i in range(3):
-            a, b = int(face[i]), int(face[(i + 1) % 3])
-            directed_edges.add((a, b))
-            e = tuple(sorted((a, b)))
+            e = tuple(sorted((face[i], face[(i + 1) % 3])))
             edge_count[e] = edge_count.get(e, 0) + 1
 
     boundary_edges = {e for e, c in edge_count.items() if c == 1}
@@ -286,12 +281,12 @@ def fill_small_holes(
             tuple(sorted((int(loop[i]), int(loop[(i + 1) % len(loop)]))))
             for i in range(len(loop))
         )
+        # Source cumesh fill_holes emits [high, low, centroid] over sorted
+        # boundary edges (trellis2mlx f5fae44, observed on the real route).
+        # Cap winding is therefore not coherent here; the final orientation
+        # pass is responsible for it, as in the source pipeline.
         for v0, v1 in loop_edges:
-            # Existing face traverses v0->v1: cap traverses v1->v0.
-            if (v0, v1) in directed_edges:
-                new_faces.append([v1, v0, centroid_idx])
-            else:
-                new_faces.append([v0, v1, centroid_idx])
+            new_faces.append([v1, v0, centroid_idx])
         filled += 1
 
     if verbose and filled > 0:

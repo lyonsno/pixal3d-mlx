@@ -1,6 +1,7 @@
 """Cleanup regressions found in review of cf37acf.
 
-F1: hole caps must follow boundary direction. F2: overloaded edges must be
+F1: cleaned helper exits must end with consistent winding (caps keep
+source order). F2: overloaded edges must be
 split even when no edge has exactly two faces. Plus later-pass coverage.
 """
 
@@ -54,15 +55,18 @@ def _three_sheets():
     return vertices, faces
 
 
-# ── F1: hole caps follow boundary direction ──
+# ── F1: caps keep source order; the final orientation pass fixes winding ──
 
-def test_fill_small_holes_caps_with_consistent_winding():
-    v, f = _open_tetra()
-    assert _winding_consistent(f)
-    out_v, out_f = fill_small_holes(v, f, verbose=False)
-    assert len(out_f) > len(f)
-    assert _winding_consistent(out_f)
-    assert _max_edge_incidence(out_f) == 2  # watertight
+def test_filled_cap_faces_match_source_edge_order():
+    """Source cumesh emits cap faces as [high, low, centroid] per boundary edge
+    (ported from trellis2mlx f5fae44)."""
+    verts = np.array([[0, 0, 0], [0.005, 0, 0], [0, 0.005, 0], [0, 0, 0.005]],
+                     dtype=np.float32)
+    faces = np.array([[0, 1, 3], [1, 2, 3], [2, 0, 3]], dtype=np.int64)
+    v_out, f_out = fill_small_holes(verts, faces, max_hole_perimeter=3e-2,
+                                    verbose=False)
+    c = len(v_out) - 1
+    assert f_out[len(faces):].tolist() == [[1, 0, c], [2, 0, c], [2, 1, c]]
 
 
 def test_generation_helper_below_simplify_threshold_keeps_winding():
