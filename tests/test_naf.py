@@ -26,7 +26,7 @@ class TestNeighborhoodAttention:
 
     def test_output_shape(self):
         """Output shape should match input spatial dims with V's channel dim."""
-        B, H, X, Y, Dq, Dv = 1, 4, 8, 8, 64, 256
+        B, H, X, Y, Dq, Dv = 1, 4, 12, 12, 64, 256  # NATTEN needs X,Y >= kernel
         q = mx.random.normal((B, H, X, Y, Dq))
         k = mx.random.normal((B, H, X, Y, Dq))
         v = mx.random.normal((B, H, X, Y, Dv))
@@ -235,22 +235,22 @@ class TestNAFCrossAttention:
     def test_output_shape(self):
         """Output should match Q spatial dims with V channel dim."""
         ca = NAFCrossAttention(dim=256, num_heads=4, kernel_size=(9, 9))
-        q = mx.random.normal((1, 256, 32, 32))  # BCHW
-        k = mx.random.normal((1, 256, 8, 8))
-        v = mx.random.normal((1, 1024, 8, 8))
+        q = mx.random.normal((1, 256, 36, 36))  # BCHW
+        k = mx.random.normal((1, 256, 9, 9))    # NATTEN: key grid >= kernel
+        v = mx.random.normal((1, 1024, 9, 9))
         out = ca(q, k, v)
         mx.eval(out)
-        assert out.shape == (1, 1024, 32, 32)
+        assert out.shape == (1, 1024, 36, 36)
 
     def test_upsample_ratio_4x(self):
         """4x upsample ratio should work (the standard NAF case)."""
         ca = NAFCrossAttention(dim=64, num_heads=2, kernel_size=(5, 5))
-        q = mx.random.normal((1, 64, 16, 16))
-        k = mx.random.normal((1, 64, 4, 4))
-        v = mx.random.normal((1, 128, 4, 4))
+        q = mx.random.normal((1, 64, 20, 20))
+        k = mx.random.normal((1, 64, 5, 5))
+        v = mx.random.normal((1, 128, 5, 5))
         out = ca(q, k, v)
         mx.eval(out)
-        assert out.shape == (1, 128, 16, 16)
+        assert out.shape == (1, 128, 20, 20)
 
 
 # ── NAF Model ──
@@ -261,30 +261,30 @@ class TestNAFModel:
     def test_smoke(self):
         """NAF should produce correct output shape without crashing."""
         naf = NAF(dim=256, heads_attn=4, heads_rope=4, kernel_size=9)
-        image = mx.random.normal((1, 3, 64, 64))
-        features = mx.random.normal((1, 1024, 4, 4))
-        out = naf(image, features, (16, 16))
+        image = mx.random.normal((1, 3, 72, 72))
+        features = mx.random.normal((1, 1024, 9, 9))  # >= kernel (NATTEN)
+        out = naf(image, features, (18, 18))
         mx.eval(out)
-        assert out.shape == (1, 1024, 16, 16)
+        assert out.shape == (1, 1024, 18, 18)
         assert not mx.any(mx.isnan(out)).item()
 
     def test_output_not_trivial(self):
         """Output should not be all zeros or constant."""
         naf = NAF(dim=256, heads_attn=4, heads_rope=4, kernel_size=9)
-        image = mx.random.normal((1, 3, 64, 64))
-        features = mx.random.normal((1, 512, 4, 4))
-        out = naf(image, features, (16, 16))
+        image = mx.random.normal((1, 3, 72, 72))
+        features = mx.random.normal((1, 512, 9, 9))
+        out = naf(image, features, (18, 18))
         mx.eval(out)
         assert float(mx.std(out)) > 0.01, "Output should have variation"
 
     def test_different_images_different_output(self):
         """Different guide images should produce different upsampled features."""
         naf = NAF(dim=64, heads_attn=2, heads_rope=2, kernel_size=5)
-        features = mx.random.normal((1, 256, 4, 4))
-        img_a = mx.random.normal((1, 3, 32, 32))
-        img_b = mx.random.normal((1, 3, 32, 32)) * 2
-        out_a = naf(img_a, features, (8, 8))
-        out_b = naf(img_b, features, (8, 8))
+        features = mx.random.normal((1, 256, 5, 5))
+        img_a = mx.random.normal((1, 3, 40, 40))
+        img_b = mx.random.normal((1, 3, 40, 40)) * 2
+        out_a = naf(img_a, features, (10, 10))
+        out_b = naf(img_b, features, (10, 10))
         mx.eval(out_a, out_b)
         diff = float(mx.mean(mx.abs(out_a - out_b)))
         assert diff > 0.001, f"Different images should produce different output, diff={diff}"
@@ -292,15 +292,15 @@ class TestNAFModel:
     def test_bchw_convention(self):
         """NAF expects BCHW input and produces BCHW output."""
         naf = NAF(dim=64, heads_attn=2, heads_rope=2, kernel_size=5)
-        image = mx.random.normal((1, 3, 32, 32))  # BCHW
-        features = mx.random.normal((1, 128, 4, 4))  # BCHW
-        out = naf(image, features, (8, 8))
+        image = mx.random.normal((1, 3, 40, 40))  # BCHW
+        features = mx.random.normal((1, 128, 5, 5))  # BCHW, >= kernel
+        out = naf(image, features, (10, 10))
         mx.eval(out)
         # Output should be BCHW with features' channel count
         assert out.shape[0] == 1  # B
         assert out.shape[1] == 128  # C (from features)
-        assert out.shape[2] == 8  # H (output_size)
-        assert out.shape[3] == 8  # W (output_size)
+        assert out.shape[2] == 10  # H (output_size)
+        assert out.shape[3] == 10  # W (output_size)
 
 
 # ── NAF Weight Loading ──
@@ -331,9 +331,9 @@ class TestNAFWeightLoading:
         model = NAF()
         load_naf_weights(model, NAF_WEIGHTS, verbose=False)
 
-        image = mx.random.normal((1, 3, 64, 64))
-        features = mx.random.normal((1, 1024, 4, 4))
-        out = model(image, features, (16, 16))
+        image = mx.random.normal((1, 3, 72, 72))
+        features = mx.random.normal((1, 1024, 9, 9))  # >= kernel (NATTEN)
+        out = model(image, features, (18, 18))
         mx.eval(out)
 
         assert not mx.any(mx.isnan(out)).item(), "Output contains NaN"

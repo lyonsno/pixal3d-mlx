@@ -142,6 +142,27 @@ def make_encoder(in_channels: int, out_channels: int, kernel_size: int = 1,
 
 # ── Neighborhood attention as masked full attention ──
 
+def _natten_window_indices(length: int, kernel: int, dilation: int) -> np.ndarray:
+    """Per-position neighbor indices with NATTEN border semantics.
+
+    Dilated NA is standard NA within each interleaved dilation group
+    (natten token_permute); standard NA shifts windows inward at borders
+    (natten na_utils.cuh get_window_start, stride=1). Returns [length, kernel].
+    """
+    i = np.arange(length)
+    group = i % dilation
+    a = i // dilation
+    group_len = (length - group + dilation - 1) // dilation
+    if np.any(group_len < kernel):
+        raise ValueError(
+            f"neighborhood kernel {kernel} with dilation {dilation} needs "
+            f"length >= {kernel * dilation}, got {length}"
+        )
+    start = np.clip(a - kernel // 2, 0, group_len - kernel)
+    return (group[:, None]
+            + (start[:, None] + np.arange(kernel)[None, :]) * dilation).astype(np.int32)
+
+
 def neighborhood_attention(q, k, v, kernel_size, scale, dilation=(1, 1)):
     """Neighborhood attention via gather-based windowed attention.
 
@@ -166,17 +187,11 @@ def neighborhood_attention(q, k, v, kernel_size, scale, dilation=(1, 1)):
     Dv = v.shape[-1]
     Kh, Kw = kernel_size if isinstance(kernel_size, (tuple, list)) else (kernel_size, kernel_size)
     dh, dw = dilation if isinstance(dilation, (tuple, list)) else (dilation, dilation)
-    half_kh, half_kw = Kh // 2, Kw // 2
 
-    # With dilation, the effective padding needed is half_k * dilation
-    pad_h = half_kh * dh
-    pad_w = half_kw * dw
-
-    # Pad K and V so boundary positions have full neighborhoods
-    k_padded = mx.pad(k, [(0,0), (0,0), (pad_h, pad_h), (pad_w, pad_w), (0,0)],
-                       mode="edge")
-    v_padded = mx.pad(v, [(0,0), (0,0), (pad_h, pad_h), (pad_w, pad_w), (0,0)],
-                       mode="edge")
+    # NATTEN semantics: no padding. Windows shift inward at borders so every
+    # query sees K distinct in-bounds keys within its dilation group.
+    idx_h = _natten_window_indices(X, Kh, dh)  # [X, Kh]
+    idx_w = mx.array(_natten_window_indices(Y, Kw, dw))  # [Y, Kw]
 
     # Process in row chunks to control peak memory.
     # Each chunk allocates [B, H, chunk, Y, K², D] window tensors.
@@ -189,16 +204,17 @@ def neighborhood_attention(q, k, v, kernel_size, scale, dilation=(1, 1)):
         row_end = min(row_start + CHUNK_ROWS, X)
         chunk_x = row_end - row_start
 
-        # Extract neighbor windows with dilation
-        # Neighbor offsets: di * dh for i in range(Kh), dj * dw for j in range(Kw)
+        # Gather neighbor windows: rows/cols come from NATTEN index tables.
         k_windows = []
         v_windows = []
         for di in range(Kh):
+            rows = mx.array(idx_h[row_start:row_end, di])
+            k_rows = mx.take(k, rows, axis=2)
+            v_rows = mx.take(v, rows, axis=2)
             for dj in range(Kw):
-                offset_h = di * dh
-                offset_w = dj * dw
-                k_windows.append(k_padded[:, :, row_start + offset_h:row_start + offset_h + chunk_x, offset_w:offset_w + Y, :])
-                v_windows.append(v_padded[:, :, row_start + offset_h:row_start + offset_h + chunk_x, offset_w:offset_w + Y, :])
+                cols = idx_w[:, dj]
+                k_windows.append(mx.take(k_rows, cols, axis=3))
+                v_windows.append(mx.take(v_rows, cols, axis=3))
 
         k_nbr = mx.stack(k_windows, axis=4)
         v_nbr = mx.stack(v_windows, axis=4)
