@@ -3,7 +3,9 @@
 Fix 1: CFG rescale stability (samplers.py)
   - Bessel-corrected std (ddof=1, matching PyTorch torch.std)
   - Safe division for zero-std inputs
-  - Ratio clamped to [0.5, 2.0]
+  - No ratio clamp: upstream ClassifierFreeGuidanceSamplerMixin applies the
+    raw std ratio (the July-1 [0.5, 2.0] clamp masked a std-axis error on
+    sparse tokens; see tests/test_cfg_rescale_source_contract.py)
 
 Fix 2: Alpha mode forced OPAQUE (texture_bake.py)
   - GLB export always uses OPAQUE, never auto-detects BLEND
@@ -89,42 +91,24 @@ def test_cfg_rescale_bessel_diverges():
     # std values match PyTorch, which we verify by computing the expected output.
     # For the ratio test, what matters is that the code computes std correctly
     # at all (not using plain variance, for instance).
-    expected = np.array(x_cfg) * np.clip(ratio_bessel, 0.5, 2.0)
+    expected = np.array(x_cfg) * ratio_bessel
     np.testing.assert_allclose(
         np.array(result), expected, rtol=1e-5,
         err_msg="CFG rescale output does not match expected Bessel-corrected result"
     )
 
 
-def test_cfg_rescale_ratio_is_clamped():
-    """The std_pos/std_cfg ratio must be clamped to [0.5, 2.0]."""
-    # Case 1: ratio >> 2.0 (high-variance pos, low-variance cfg)
+def test_cfg_rescale_ratio_is_not_clamped():
+    """Upstream applies std_pos/std_cfg unclamped (classifier_free_guidance_mixin.py:25)."""
     x_pos_high = mx.array([[0.0, 100.0, 0.0, 100.0, 0.0]])
     x_cfg_low = mx.array([[4.9, 5.0, 4.9, 5.0, 4.9]])
-
     result_high = _cfg_rescale(x_pos_high, x_cfg_low)
-    mx.eval(result_high)
+    ratio = np.std(np.array(x_pos_high), ddof=1) / np.std(np.array(x_cfg_low), ddof=1)
+    assert ratio > 2.0
+    np.testing.assert_allclose(np.array(result_high), np.array(x_cfg_low) * ratio, rtol=1e-4)
 
-    # If clamped to 2.0, output = x_cfg * 2.0
-    expected_clamped_high = np.array(x_cfg_low) * 2.0
-    np.testing.assert_allclose(
-        np.array(result_high), expected_clamped_high, rtol=1e-5,
-        err_msg="CFG rescale ratio not clamped at upper bound 2.0"
-    )
-
-    # Case 2: ratio << 0.5 (low-variance pos, high-variance cfg)
-    x_pos_low = mx.array([[4.9, 5.0, 4.9, 5.0, 4.9]])
-    x_cfg_high = mx.array([[0.0, 100.0, 0.0, 100.0, 0.0]])
-
-    result_low = _cfg_rescale(x_pos_low, x_cfg_high)
-    mx.eval(result_low)
-
-    # If clamped to 0.5, output = x_cfg * 0.5
-    expected_clamped_low = np.array(x_cfg_high) * 0.5
-    np.testing.assert_allclose(
-        np.array(result_low), expected_clamped_low, rtol=1e-5,
-        err_msg="CFG rescale ratio not clamped at lower bound 0.5"
-    )
+    result_low = _cfg_rescale(x_cfg_low, x_pos_high)
+    np.testing.assert_allclose(np.array(result_low), np.array(x_pos_high) / ratio, rtol=1e-4)
 
 
 def test_cfg_rescale_safe_zero_std():
