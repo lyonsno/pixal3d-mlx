@@ -101,6 +101,8 @@ def _cleanup_and_simplify_mesh(
 
     Every cleaned exit ends with one winding-unification pass, as the source
     pipeline always orients after fill_holes (whose caps are not coherent).
+    Known source-parity limit: the post-final-simplify cleanup_mesh pass still
+    uses trimesh fix_normals (unification plus signed-volume inversion).
     """
     # The local cleanup route owns final orientation; an injected cleanup
     # route owns its own.
@@ -109,8 +111,10 @@ def _cleanup_and_simplify_mesh(
     def finish(vertices, faces):
         if not local_orientation:
             return vertices, faces
-        from trellmlx.mesh_cleanup import fix_normals
-        return fix_normals(vertices, faces, verbose=False)
+        # Winding unification only (source unify_face_orientations follows
+        # shared-edge flips and never inverts by signed volume).
+        from trellmlx.mesh_cleanup import orient_faces_by_adjacency
+        return orient_faces_by_adjacency(vertices, faces, verbose=False)
 
     if not no_cleanup:
         if cleanup_mesh is None:

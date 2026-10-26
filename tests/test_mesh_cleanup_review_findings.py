@@ -117,3 +117,36 @@ def test_later_cleanup_passes_preserve_split_fine_surface():
     assert simplify_calls  # coarse and final passes ran, each followed by cleanup
     assert _triangles(vertices, faces[:4]) <= _triangles(out_v, out_f)
     assert not _triangles(vertices, faces[4:]) & _triangles(out_v, out_f)
+
+
+# ── F3: terminal orientation unifies winding but never inverts by volume ──
+
+def _signed_volume(v, f):
+    a, b, c = v[f[:, 0]], v[f[:, 1]], v[f[:, 2]]
+    return float(np.einsum("ij,ij->i", a, np.cross(b, c)).sum() / 6.0)
+
+
+def test_terminal_orientation_preserves_consistent_shell_orientation():
+    """Source unify_face_orientations only follows shared-edge flips; it does
+    not choose outward orientation (mtlmesh clean_up.cu unify_face_orientations)."""
+    from generate import _cleanup_and_simplify_mesh
+
+    v = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=np.float32)
+    f = np.array([[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]], dtype=np.int64)
+    # Larger inward shell, smaller outward shell, disconnected.
+    vertices = np.vstack([v * 2, v + np.array([4, 0, 0], np.float32)])
+    faces = np.vstack([f[:, ::-1], f + 4])
+    big_before = _signed_volume(vertices, faces[:4])
+    small_before = _signed_volume(vertices, faces[4:])
+    assert big_before < 0 < small_before
+
+    out_v, out_f = _cleanup_and_simplify_mesh(
+        vertices, faces, target_faces=500_000, no_cleanup=False,
+        log=lambda *a, **k: None)
+
+    centroids = out_v[out_f].mean(axis=1)
+    big = out_f[centroids[:, 0] < 3]
+    small = out_f[centroids[:, 0] >= 3]
+    assert np.sign(_signed_volume(out_v, big)) == np.sign(big_before)
+    assert np.sign(_signed_volume(out_v, small)) == np.sign(small_before)
+    assert _winding_consistent(out_f)
