@@ -57,7 +57,7 @@ class ChannelLayerNorm32(nn.Module):
     norm_type is "layer", NOT "group".
     """
 
-    def __init__(self, channels: int, eps: float = 1e-6):
+    def __init__(self, channels: int, eps: float = 1e-5):  # nn.LayerNorm default
         super().__init__()
         self.eps = eps
         self.weight = mx.ones((channels,))

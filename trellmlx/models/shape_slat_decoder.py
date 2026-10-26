@@ -316,7 +316,8 @@ class SLatDecoder(nn.Module):
         else:
             feats, coords = result
 
-        feats = _layernorm_noaffine(feats)
+        # Upstream sparse_unet_vae terminal F.layer_norm: torch default eps=1e-5.
+        feats = _layernorm_noaffine(feats, eps=1e-5)
         out = self.output_layer(feats)
 
         if return_subs:

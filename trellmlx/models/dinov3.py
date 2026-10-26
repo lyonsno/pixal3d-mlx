@@ -100,7 +100,8 @@ class DINOv3ViT(nn.Module):
         # The checkpoint has learned norm.weight/bias from DINOv3 pretraining,
         # but TRELLIS.2 was trained on features WITHOUT those applied.
         # Applying them produces 0 sparse voxels (out of distribution).
-        x = mx.fast.layer_norm(x, None, None, 1e-6)
+        # Upstream extractor uses F.layer_norm (torch default eps=1e-5).
+        x = mx.fast.layer_norm(x, None, None, 1e-5)
 
         return x
 
@@ -128,11 +129,11 @@ class DINOv3Layer(nn.Module):
 
     def __init__(self, hidden_size: int, num_heads: int, intermediate_size: int):
         super().__init__()
-        self.norm1 = nn.LayerNorm(hidden_size, eps=1e-6)
+        self.norm1 = nn.LayerNorm(hidden_size, eps=1e-5)
         self.attention = DINOv3Attention(hidden_size, num_heads)
         self.layer_scale1 = mx.zeros((hidden_size,))
 
-        self.norm2 = nn.LayerNorm(hidden_size, eps=1e-6)
+        self.norm2 = nn.LayerNorm(hidden_size, eps=1e-5)
         self.mlp = DINOv3MLP(hidden_size, intermediate_size)
         self.layer_scale2 = mx.zeros((hidden_size,))
 

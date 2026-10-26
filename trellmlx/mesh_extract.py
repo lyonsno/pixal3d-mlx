@@ -179,4 +179,5 @@ def _sigmoid(x):
 
 
 def _softplus(x):
-    return np.log1p(np.exp(np.clip(x, -20, 20)))
+    # torch F.softplus(beta=1, threshold=20): linear above the threshold.
+    return np.where(x > 20, x, np.log1p(np.exp(np.minimum(x, 20))))

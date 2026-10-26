@@ -184,7 +184,8 @@ class Pixal3DSparseStructureFlowModel(nn.Module):
             if (i + 1) % 6 == 0:
                 mx.eval(x)
 
-        x = _layernorm_noaffine(x)
+        # Upstream terminal F.layer_norm uses torch default eps=1e-5.
+        x = _layernorm_noaffine(x, eps=1e-5)
         x = self.out_layer(x)
 
         x = x.reshape(B, R, R, R, self.out_channels)
@@ -275,7 +276,8 @@ class Pixal3DSLatFlowModel(nn.Module):
             if (i + 1) % 6 == 0:
                 mx.eval(x)
 
-        x = _layernorm_noaffine(x)
+        # Upstream terminal F.layer_norm uses torch default eps=1e-5.
+        x = _layernorm_noaffine(x, eps=1e-5)
         x = self.out_layer(x)
         return x
 
