@@ -22,6 +22,7 @@ import numpy as np
 from PIL import Image
 
 from generate_pixal3d import (
+    to_pixal3d_glb_frame,
     get_default_camera_params, extract_proj_features, index_proj_by_coords,
     _denormalize_slat, _normalize_slat, _requantize_coords,
     SHAPE_SLAT_MEAN, SHAPE_SLAT_STD, TEX_SLAT_MEAN, TEX_SLAT_STD,
@@ -244,8 +245,7 @@ def main():
     )
     print(f"  Baked textures ({args.texture_size}x{args.texture_size})", flush=True)
 
-    export_verts = uv_verts.copy()
-    export_verts[:, 1], export_verts[:, 2] = uv_verts[:, 2].copy(), -uv_verts[:, 1].copy()
+    export_verts = to_pixal3d_glb_frame(uv_verts)
     export_uvs = uvs.copy()
     export_uvs[:, 1] = 1 - export_uvs[:, 1]
 

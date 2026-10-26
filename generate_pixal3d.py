@@ -124,6 +124,17 @@ def load_checkpointed_camera(ckpt_dir):
     return {key: float(meta[key]) for key in ("camera_angle_x", "distance", "mesh_scale")}
 
 
+def to_pixal3d_glb_frame(vertices):
+    """Map mesh-grid vertices into the frame upstream Pixal3D exports.
+
+    Upstream inference.py first runs o_voxel ``to_glb`` (x, y, z) -> (x, z, -y),
+    then applies its own rotation (inference.py:271-278). Composite: (-x, y, -z),
+    a proper rotation (no winding flip).
+    """
+    v = np.asarray(vertices)
+    return v * np.array([-1, 1, -1], dtype=v.dtype)
+
+
 # === Helpers ===
 
 def _denormalize_slat(slat, mean=SHAPE_SLAT_MEAN, std=SHAPE_SLAT_STD):
@@ -802,10 +813,8 @@ def main():
     )
     print(f"  Baked textures ({args.texture_size}x{args.texture_size})", flush=True)
 
-    # Export GLB
-    # Swap Y/Z axes for GLB (matches reference coordinate convention)
-    export_verts = uv_verts.copy()
-    export_verts[:, 1], export_verts[:, 2] = uv_verts[:, 2].copy(), -uv_verts[:, 1].copy()
+    # Export GLB in the upstream Pixal3D frame
+    export_verts = to_pixal3d_glb_frame(uv_verts)
 
     export_uvs = uvs.copy()
     export_uvs[:, 1] = 1 - export_uvs[:, 1]
