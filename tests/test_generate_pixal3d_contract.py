@@ -132,7 +132,8 @@ def test_resume_texture_projection_uses_checkpoint_resolution(monkeypatch, resol
 
 
 @pytest.mark.parametrize("resolution", [512, 1024])
-def test_hr_and_texture_projection_follow_actual_latent_grid(monkeypatch, resolution):
+@pytest.mark.parametrize("native_finish", [False, True])
+def test_hr_and_texture_projection_follow_actual_latent_grid(monkeypatch, tmp_path, resolution, native_finish):
     """Replay main through texture sampling with tiny stage stand-ins.
 
     Upstream Pixal3DImageTo3DPipeline.run derives both projection overrides
@@ -156,12 +157,14 @@ def test_hr_and_texture_projection_follow_actual_latent_grid(monkeypatch, resolu
 
     class TinyShapeDecoder:
         def __init__(self, **kwargs):
-            pass
+            self.channels = kwargs["out_channels"]
 
         def upsample(self, *args, **kwargs):
             return mx.array([[0, 0, 0, 0], [0, 511, 511, 511]])
 
         def __call__(self, *args, **kwargs):
+            if self.channels == 6:
+                return mx.zeros((2, 6)), mx.zeros((2, 4), dtype=mx.int32)
             return mx.zeros((2, 7)), mx.zeros((2, 4), dtype=mx.int32), []
 
     extracted_grids = []
@@ -181,11 +184,17 @@ def test_hr_and_texture_projection_follow_actual_latent_grid(monkeypatch, resolu
             # Both extraction and sparse indexing must use the matching grid.
             assert extracted_grids == [16, 32, resolution // 16, resolution // 16]
             assert indexed_grids == [32, resolution // 16, resolution // 16]
-            raise ReachedSampler
+            if not native_finish:
+                raise ReachedSampler
         return mx.zeros_like(noise)
 
-    monkeypatch.setattr(sys, "argv", ["generate_pixal3d.py", "--image", "unused.png",
-                                     "--no-moge", "--resolution", str(resolution)])
+    argv = ["generate_pixal3d.py", "--image", "unused.png",
+                                     "--no-moge", "--resolution", str(resolution),
+                                     "--save-checkpoints", str(tmp_path)]
+    if native_finish:
+        argv += ["--finishing-config", str(tmp_path / "metal.json"),
+                 "--output", str(tmp_path / "product.glb")]
+    monkeypatch.setattr(sys, "argv", argv)
     monkeypatch.setattr(dinov3, "DINOv3ViT", lambda: object())
     monkeypatch.setattr(dinov3, "load_dinov3_weights", lambda *a, **k: 0)
     monkeypatch.setattr(naf, "NAF", lambda: object())
@@ -199,9 +208,39 @@ def test_hr_and_texture_projection_follow_actual_latent_grid(monkeypatch, resolu
     monkeypatch.setattr(generate_pixal3d, "extract_proj_features", extract)
     monkeypatch.setattr(generate_pixal3d, "index_proj_by_coords", index)
     monkeypatch.setattr(samplers, "flow_euler_sample", sample)
-    monkeypatch.setattr(mesh_extract, "decoder_output_to_mesh", lambda *a, **k: ([], []))
-    monkeypatch.setattr(generate, "_cleanup_and_simplify_mesh", lambda v, f, **k: (v, f))
+    raw_vertices = np.array([[0., 0., 0.], [1., 0., 0.], [0., 1., 0.]], dtype=np.float32)
+    raw_faces = np.array([[0, 1, 2]], dtype=np.int64)
+    monkeypatch.setattr(mesh_extract, "decoder_output_to_mesh", lambda *a, **k: (raw_vertices, raw_faces))
+
+    def finish(v, f, **kwargs):
+        assert not native_finish, "source remeshing must consume raw geometry before local cleanup"
+        # The retained input must exist before the destructive finishing stage.
+        with np.load(tmp_path / "raw_mesh.npz") as checkpoint:
+            np.testing.assert_array_equal(checkpoint["vertices"], raw_vertices)
+            np.testing.assert_array_equal(checkpoint["faces"], raw_faces)
+        return v + 10, f
+
+    monkeypatch.setattr(generate, "_cleanup_and_simplify_mesh", finish)
     # Preprocessing is exercised in test_pixal3d_conditioning_inputs.py.
     monkeypatch.setattr(generate_pixal3d, "prepare_conditioning_image", lambda image, output, no_rembg=False: image)
-    with pytest.raises(ReachedSampler):
+    if native_finish:
+        import trellmlx.metal_finish as metal_finish
+
+        def source_finish(**kwargs):
+            assert kwargs["checkpoints"] == tmp_path
+            with np.load(tmp_path / "raw_mesh.npz") as data:
+                np.testing.assert_array_equal(data["vertices"], raw_vertices)
+                np.testing.assert_array_equal(data["faces"], raw_faces)
+            with np.load(tmp_path / "texture.npz") as data:
+                np.testing.assert_array_equal(data["tex_out"], np.full((2, 6), .5))
+            artifact = tmp_path / "source.glb"
+            artifact.write_bytes(b"exact selected finalizer product")
+            return {"status": "complete", "output": {"path": str(artifact)}}
+
+        monkeypatch.setattr(metal_finish, "finish", source_finish)
+        monkeypatch.setattr(metal_finish, "validate_config", lambda path: {})
         generate_pixal3d.main()
+        assert (tmp_path / "product.glb").read_bytes() == b"exact selected finalizer product"
+    else:
+        with pytest.raises(ReachedSampler):
+            generate_pixal3d.main()

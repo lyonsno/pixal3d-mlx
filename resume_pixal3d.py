@@ -15,6 +15,7 @@ import gc
 import math
 import os
 import time
+from pathlib import Path
 
 import mlx.core as mx
 import mlx.nn as nn
@@ -31,9 +32,9 @@ from generate_pixal3d import (
 
 def main():
     parser = argparse.ArgumentParser(description="Resume Pixal3D from checkpoint")
-    parser.add_argument("--image", required=True)
+    parser.add_argument("--image")
     parser.add_argument("--ckpt", required=True, help="Checkpoint directory")
-    parser.add_argument("--output", default="outputs/resumed.glb")
+    parser.add_argument("--output")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--fov", type=float, default=-1.0)
     parser.add_argument("--texture-size", type=int, default=4096)
@@ -41,7 +42,31 @@ def main():
     parser.add_argument("--no-rembg", action="store_true")
     parser.add_argument("--no-cleanup", action="store_true")
     parser.add_argument("--keep-largest", action="store_true")
+    parser.add_argument("--finish-only", action="store_true",
+                        help="Finish saved raw_mesh/texture with the original Metal remesher; no inference")
+    parser.add_argument("--finishing-config", type=Path,
+                        help="Explicit TRELLIS exporter/interpreter/Metal backend JSON")
+    parser.add_argument("--finishing-output", type=Path,
+                        help="New directory for the saved finishing result and report")
     args = parser.parse_args()
+
+    if args.finish_only:
+        if args.finishing_config is None or args.finishing_output is None:
+            parser.error("--finish-only requires --finishing-config and --finishing-output")
+        if args.no_cleanup or args.keep_largest:
+            parser.error("--finish-only uses the source remeshing policy; --no-cleanup/--keep-largest do not apply")
+        if args.output is not None:
+            parser.error("--finish-only writes --finishing-output/output.glb; omit --output")
+        from trellmlx.metal_finish import finish
+        result = finish(checkpoints=Path(args.ckpt), output_dir=args.finishing_output,
+                        config_path=args.finishing_config, target_faces=args.target_faces,
+                        texture_size=args.texture_size)
+        raise SystemExit(0 if result["status"] == "complete" else 1)
+    if args.finishing_config is not None or args.finishing_output is not None:
+        parser.error("--finishing-config/--finishing-output require --finish-only")
+    if args.image is None:
+        parser.error("--image is required when resuming inference")
+    args.output = args.output or "outputs/resumed.glb"
 
     mx.random.seed(args.seed)
     mx.metal.reset_peak_memory()

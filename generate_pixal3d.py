@@ -293,7 +293,23 @@ def main():
                         help="Quantize flow models (0=off, 4=INT4, 8=INT8). Reduces memory ~4-6x.")
     parser.add_argument("--ss-only", action="store_true",
                         help="Run only sparse structure stage (for debugging)")
+    parser.add_argument("--finishing-config", metavar="JSON",
+                        help="Use the optional original Metal remesher; requires --save-checkpoints")
+    parser.add_argument("--finishing-output", metavar="DIR",
+                        help="New finishing report/artifact directory (default: OUTPUT with .finishing suffix)")
     args = parser.parse_args()
+
+    if args.finishing_config:
+        if not args.save_checkpoints:
+            parser.error("--finishing-config requires --save-checkpoints")
+        if args.resume:
+            parser.error("use resume_pixal3d.py --finish-only for saved source remeshing")
+        if args.no_cleanup or args.keep_largest or args.ss_only:
+            parser.error("selected source remeshing cannot use --no-cleanup, --keep-largest or --ss-only")
+        from trellmlx.metal_finish import validate_config
+        validate_config(args.finishing_config)
+    elif args.finishing_output:
+        parser.error("--finishing-output requires --finishing-config")
 
     # Redirect --resume to the dedicated resume script
     if args.resume:
@@ -647,23 +663,29 @@ def main():
     )
     print(f"  Extracted: {time.perf_counter()-t0:.1f}s ({len(vertices):,}V {len(faces):,}F)", flush=True)
 
+    if save_ckpts:
+        save_checkpoint(ckpt_dir, "raw_mesh", vertices=vertices, faces=faces,
+                        mesh_grid_size=mesh_grid_size)
+
     # Use the same multi-pass cleanup+simplify as trellis2mlx generate.py
     from generate import _cleanup_and_simplify_mesh
-    vertices, faces = _cleanup_and_simplify_mesh(
-        vertices, faces,
-        target_faces=args.target_faces,
-        no_cleanup=args.no_cleanup,
-        keep_largest=args.keep_largest,
-    )
+    if not args.finishing_config:
+        vertices, faces = _cleanup_and_simplify_mesh(
+            vertices, faces,
+            target_faces=args.target_faces,
+            no_cleanup=args.no_cleanup,
+            keep_largest=args.keep_largest,
+        )
 
     if save_ckpts:
         # Save subdivision masks as list of arrays
         subs_list = [np.array(s) for s in shape_subs] if shape_subs else []
-        save_checkpoint(ckpt_dir, "mesh",
-                        vertices=vertices, faces=faces,
-                        quant_coords=quant_coords,
-                        hr_slat=np.array(hr_slat),
-                        hr_resolution=hr_resolution)
+        if not args.finishing_config:
+            save_checkpoint(ckpt_dir, "mesh",
+                            vertices=vertices, faces=faces,
+                            quant_coords=quant_coords,
+                            hr_slat=np.array(hr_slat),
+                            hr_resolution=hr_resolution)
         save_checkpoint(ckpt_dir, "shape_subs", subs=subs_list)
 
     # === Stage 4: Texture (proj, 1024) ===
@@ -788,6 +810,23 @@ def main():
         save_checkpoint(ckpt_dir, "texture",
                         tex_out=np.array(tex_out),
                         tex_coords=np.array(tex_coords))
+
+    if args.finishing_config:
+        from pathlib import Path
+        import shutil
+        from trellmlx.metal_finish import finish
+        output = Path(args.output).resolve()
+        result = finish(checkpoints=Path(ckpt_dir),
+                        output_dir=Path(args.finishing_output) if args.finishing_output else output.with_suffix(".finishing"),
+                        config_path=Path(args.finishing_config), target_faces=args.target_faces,
+                        texture_size=args.texture_size)
+        if result["status"] != "complete":
+            raise RuntimeError(result.get("error", "source remeshing failed; inspect its report"))
+        output.parent.mkdir(parents=True, exist_ok=True)
+        if Path(result["output"]["path"]).resolve() != output:
+            shutil.copyfile(result["output"]["path"], output)
+        print(f"  Saved: {output}", flush=True)
+        return
 
     # === Stage 6: Texture Bake + GLB Export ===
     print("\n=== Stage 6: Texture Bake + GLB ===", flush=True)

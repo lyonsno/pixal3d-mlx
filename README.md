@@ -2,7 +2,7 @@
 
 MLX-native [Pixal3D](https://github.com/TencentARC/Pixal3D) (SIGGRAPH 2026) inference for Apple Silicon.
 
-Image → textured 3D mesh with PBR materials. No NVIDIA GPU required. Entire pipeline is pure MLX on Metal — including camera estimation via a native MoGe-2 port ([details](docs/moge-camera-estimation.md)).
+Image → textured 3D mesh with PBR materials. No NVIDIA GPU required. Inference and camera estimation run natively through MLX on Metal ([MoGe-2 details](docs/moge-camera-estimation.md)). The default exporter uses NumPy/xatlas and MLX texture baking; an optional original Metal remeshing exporter is available below.
 
 [Pixal3D](https://github.com/TencentARC/Pixal3D) uses pixel-aligned back-projection conditioning to establish direct pixel-to-3D correspondence, producing dramatically better geometry and texture fidelity than attention-based conditioning alone. This port runs the full pipeline natively on Apple Silicon via [MLX](https://github.com/ml-explore/mlx), including a pure-MLX port of [NAF](https://github.com/valeoai/NAF) (Neural Attention Fields) for feature upsampling.
 
@@ -73,6 +73,46 @@ PYTHONPATH=. python generate_pixal3d.py --image photo.png --output mesh.glb --te
 # Resume from checkpoint (skip geometry, redo texture):
 PYTHONPATH=. python resume_pixal3d.py --image photo.png --ckpt outputs/ckpt_dir --output mesh.glb
 ```
+
+### Optional original Metal remeshing
+
+Some raw dual-grid meshes lose substantial surface detail during cleanup and aggressive reduction. The original remeshing branch rebuilds surface topology before reducing it. On the retained 512/INT4 sample, this preserved the shell and lettering that the local finishing path fragmented, using the same saved prediction.
+
+This option reuses the [TRELLIS2MLX original Metal exporter](https://github.com/lyonsno/trellis2mlx/blob/main/docs/original-metal-remeshing.md). It requires that optional Torch-facing Metal stack and its backend identity manifest; these are separate from the core MLX installation. Set up that exporter first, then create `metal-finishing.json` with your installed paths and pinned source revision:
+
+```json
+{
+  "schema": "pixal3d.original-metal-finishing.v1",
+  "source_root": "/absolute/path/to/trellis2mlx",
+  "source_revision": "FULL_COMMIT_OF_THAT_CHECKOUT",
+  "python": "/absolute/path/to/metal-environment/bin/python",
+  "backend_manifest": "/absolute/path/to/metal-backend.json",
+  "python_path": ["/absolute/path/to/compiled-metal-packages"],
+  "band": 1,
+  "project_back": 0
+}
+```
+
+Generate with this finalizer:
+
+```bash
+PYTHONPATH=. python generate_pixal3d.py \
+  --image photo.png --resolution 512 --quantize 4 \
+  --save-checkpoints outputs/sample-checkpoints \
+  --finishing-config metal-finishing.json \
+  --target-faces 200000 --texture-size 1024 --output outputs/sample.glb
+```
+
+Or finish already saved fields, without loading model weights or repeating inference:
+
+```bash
+PYTHONPATH=. python resume_pixal3d.py --finish-only \
+  --ckpt outputs/sample-checkpoints --finishing-config metal-finishing.json \
+  --finishing-output outputs/sample-remeshed \
+  --target-faces 200000 --texture-size 1024
+```
+
+The latter writes `outputs/sample-remeshed/output.glb` in Pixal3D's final coordinate frame, plus a report and the original exporter's intermediate stages. Each finishing attempt needs a new output directory. The saved inputs are `raw_mesh.npz`, `texture.npz`, and matching grid metadata; generation with `--save-checkpoints` now retains the raw mesh before local cleanup. Older checkpoint sets without that raw mesh need a new decode rather than reusing a damaged finished mesh as the original prediction.
 
 ### Pipeline
 
